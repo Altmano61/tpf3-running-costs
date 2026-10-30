@@ -30,9 +30,10 @@ function data()
 	a("R::KampfmoehreRunningCostsTable ProgressBar!kampfmoehre-rc-warn", {
 		color = colorDefault.Warning,
 	})
-	-- parked (depot)
+	-- parked (depot): a muted blue; the base greys are too close to the bar's
+	-- own background to read (user report 2026-10-30)
 	a("R::KampfmoehreRunningCostsTable ProgressBar!kampfmoehre-rc-off", {
-		color = colorDefault.BaseLightMedium,
+		color = colorDefault.AccentDark,
 	})
 	-- amounts right-aligned, whatever side the currency symbol is on
 	a("R::KampfmoehreRunningCostsTable TextView!kampfmoehre-rc-money", {
