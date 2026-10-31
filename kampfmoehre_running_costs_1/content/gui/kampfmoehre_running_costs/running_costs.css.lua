@@ -1,7 +1,7 @@
 local ssu = require "::/gui/main/stylesheetutil.lua"
 
 -- Running Cost Breakdown: the breakdown table (running_costs.script.lua
--- CostTable) with time-share bars like Top Speed's section table, and the
+-- CostTable) and the maintenance fee table (FeeTable, 0.3.0) with time-share bars like Top Speed's section table, and the
 -- colour of the vehicle window's live line.
 function data()
 	local result = {}
@@ -9,7 +9,7 @@ function data()
 
 	local colorDefault = api.gui.genericRep.get(api.gui.genericRep.find("::/gui/main/default_colors.gres")).data
 
-	a("R::KampfmoehreRunningCostsTable TextView", {
+	a("R::KampfmoehreRunningCostsTable TextView, R::KampfmoehreRunningCostsFeeTable TextView", {
 		padding = { 1, 6, 1, 6 },
 	})
 	a("R::KampfmoehreRunningCostsTable ProgressBar!kampfmoehre-rc-bar", {
@@ -36,11 +36,11 @@ function data()
 		color = colorDefault.AccentDark,
 	})
 	-- amounts right-aligned, whatever side the currency symbol is on
-	a("R::KampfmoehreRunningCostsTable TextView!kampfmoehre-rc-money", {
+	a("R::KampfmoehreRunningCostsTable TextView!kampfmoehre-rc-money, R::KampfmoehreRunningCostsFeeTable TextView!kampfmoehre-rc-money", {
 		gravity = { 1, 0.5 },
 	})
 	-- counts and percentages right-aligned too (income table)
-	a("R::KampfmoehreRunningCostsTable TextView!kampfmoehre-rc-num", {
+	a("R::KampfmoehreRunningCostsTable TextView!kampfmoehre-rc-num, R::KampfmoehreRunningCostsFeeTable TextView!kampfmoehre-rc-num", {
 		gravity = { 1, 0.5 },
 	})
 	-- cargo icon of the income table, sized like a text line
@@ -53,6 +53,11 @@ function data()
 	a("!font-large R::KampfmoehreRunningCostsTable ImageView!kampfmoehre-rc-cargo", { size = { 28, 28 } })
 	a("R::KampfmoehreRunningCostsTable Component!kampfmoehre-rc-barcell", {
 		gravity = { -1, -1 },
+	})
+	-- vehicle name as a flat button (opens the vehicle window)
+	a("R::KampfmoehreRunningCostsFeeTable Button!kampfmoehre-rc-namebutton", {
+		gravity = { 0, 0.5 },
+		padding = { 0, 0, 0, 0 },
 	})
 	-- live line while waiting en route (also used outside the table)
 	a("TextView!kampfmoehre-rc-warn", {

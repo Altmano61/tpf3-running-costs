@@ -10,15 +10,19 @@
 --  * in the line window the same table under the income graph of the
 --    "Balance" card: content_card.ContentCard is wrapped and, for the card
 --    with localKey "lineBalance", its permanent recipe is replaced by one that
---    renders the original graph plus our table (BalanceWithCosts).
+--    renders the original graph plus our table (BalanceWithCosts);
+--  * in the window of a depot or maintenance building (MaintenanceFeePlugin,
+--    order 35, 0.3.0) a card with the building's "Maintenance Vehicles" fee of
+--    the last default year, the share charged for vehicles that were already
+--    in very good condition, and a table of the vehicles in its pool.
 -- The history comes from the game script in content/running_costs/
 -- (running_costs.script.lua), read through the GAME_SCRIPT component of its
 -- entity; the live line is computed here from the vehicle component.
--- Pure helpers: cost_classes.lua (classes, factors) and cost_rows.lua (rows,
--- live values), both unit-tested with luajit.
+-- Pure helpers: cost_classes.lua (classes, factors), cost_rows.lua (rows,
+-- live values) and fee_rows.lua (maintenance card), all unit-tested with luajit.
 
 function data()
-	local VERSION = "0.2.0"
+	local VERSION = "0.3.0"
 	local SAMPLE_S = 2     -- seconds between reads of the sampler state / table refreshes
 	local LOG_PREFIX = "[kampfmoehre_running_costs] "
 	local GS_NAME = "kampfmoehre_running_costs_1::/running_costs/running_costs.gs"
@@ -33,6 +37,7 @@ function data()
 	local classes = ug_require "kampfmoehre_running_costs_1::/running_costs/cost_classes.lua"
 	local cost_rows = ug_require "kampfmoehre_running_costs_1::/gui/kampfmoehre_running_costs/cost_rows.lua"
 	local cost_history = ug_require "kampfmoehre_running_costs_1::/running_costs/cost_history.lua"
+	local fee_rows = ug_require "kampfmoehre_running_costs_1::/gui/kampfmoehre_running_costs/fee_rows.lua"
 
 	local function round(x) return math.floor(x + 0.5) end
 	local function money(x) return api.util.formatMoney(round(x or 0)) end
@@ -700,7 +705,327 @@ function data()
 		return origContentCard(...)
 	end
 
-	log.message(LOG_PREFIX .. "v" .. VERSION .. " GUI loaded (vehicle row, balance card table)")
+	-- Depot / maintenance building window: the maintenance fee card (0.3.0) ------
+	--
+	-- The game books "Maintenance Vehicles" as a pool fee: 25 % of the running
+	-- cost of every vehicle a building lists in its pool, per second listed,
+	-- also at 100 % condition (measured 2026-10-30). The sampler keeps one ring
+	-- per building under `pool` and the buildings per vehicle under
+	-- `maintainedBy`; both are read by path like the summaries.
+
+	local FEE_CARD_KEY = "kampfmoehreRunningCostsFee"
+	local poolNativeFailed = false
+	local poolCopy = { time = nil, st = nil }
+	-- state[key][sub] of the sampler, or nil
+	local function stateEntry(gs, key, sub)
+		if not gs then return nil end
+		if not poolNativeFailed then
+			local ok, r = pcall(function()
+				local native = gs.state_native
+				if native == nil then return "nostate" end
+				local nv = native:findPath({ key, sub })
+				if nv == nil then return false end
+				return nv:asTable()
+			end)
+			if ok then
+				if type(r) == "table" then return r end
+				return nil   -- no entry (yet) or no state yet
+			end
+			poolNativeFailed = true
+			log.message(LOG_PREFIX .. "pool rings read via a copy of the whole state (findPath/asTable unavailable)")
+		end
+		local now = gameTime()
+		if poolCopy.time == nil or now - poolCopy.time >= SAMPLE_S * 1000 or now < poolCopy.time then
+			local okS, st = pcall(function() return gs.state end)
+			poolCopy.time, poolCopy.st = now, (okS and type(st) == "table") and st or nil
+		end
+		local t = poolCopy.st and poolCopy.st[key]
+		if type(t) ~= "table" then return nil end
+		return t[sub] or t[tostring(sub)]
+	end
+
+	-- the account the fee is booked on: the building's construction
+	local function depotAccount(d)
+		local ok, c = pcall(api.engine.system.streetConnectorSystem.getConstructionEntityForDepot, d)
+		if ok and type(c) == "number" and c >= 0 then return c end
+		return d
+	end
+
+	local function buildingName(b)
+		local ok, n = pcall(api.engine.util.getEntityName, b)
+		if ok and type(n) == "string" and n ~= "" then return n end
+		local okC, c = pcall(api.engine.util.getEntityName, depotAccount(b))
+		if okC and type(c) == "string" and c ~= "" then return c end
+		return tostring(b)
+	end
+
+	-- "Maintenance Vehicles" booked on the account over [t0, t1] (positive), nil when unreadable
+	local function bookedMaintenance(account, t0, t1)
+		if account == nil or t1 - t0 < 2 * BOOKING_LUMP_MS then return nil end
+		local t = api.type.JournalEntry.Maintenance.VEHICLE_MAINTENANCE
+		if t == nil then return nil end
+		local ok, v = pcall(api.engine.util.finance.calculateBalance, { account }, t0, t1, true, t)
+		if not ok or type(v) ~= "number" then return nil end
+		return -v
+	end
+
+	-- one computation per building and SAMPLE_S: the collapsed line and the
+	-- expanded table share it
+	local feeCache = {}
+	local feeDataNow
+	local function feeData(d)
+		local now = gameTime()
+		local c = feeCache[d]
+		if c and c.time <= now and now - c.time < SAMPLE_S * 1000 then return c.T end
+		local T = feeDataNow(d)
+		feeCache[d] = { time = now, T = T }
+		return T
+	end
+
+	feeDataNow = function(d)
+		local gs = gsComponent()
+		local now = gameTime()
+		local win = yearMs()
+		local entries, cov = cost_history.windowPool(stateEntry(gs, "pool", d), now, win)
+		-- sold vehicles and demolished buildings (the sweep lags up to 60 s)
+		local mb, gone = {}, {}
+		local function exists(e)
+			if gone[e] ~= nil then return not gone[e] end
+			local ok, ex = pcall(api.engine.entityExists, e)
+			gone[e] = (ok and ex == false) or false
+			return not gone[e]
+		end
+		for v in pairs(entries) do
+			exists(v)
+			local set = stateEntry(gs, "maintainedBy", v)
+			if type(set) == "table" then
+				for b in pairs(set) do exists(b) end
+			end
+			mb[v] = set
+		end
+		local T = fee_rows.build(entries, d, mb, gone)
+		T.coverageMs = cov
+		T.names, T.lines = {}, {}
+		for __, r in ipairs(T.rows) do
+			-- the vehicle's line for the name tooltip (the game numbers vehicles company-wide)
+			local w = summaryOf(gs, r.v)
+			local line = w and w.line
+			if type(line) ~= "number" or line < 0 then
+				local okT, tv = pcall(api.engine.getComponent, r.v, api.type.ComponentType.TRANSPORT_VEHICLE)
+				line = okT and tv and tv.line or nil
+			end
+			if type(line) == "number" and line >= 0 then T.lines[r.v] = entityName(line) end
+			for __, b in ipairs(r.elsewhere) do
+				if T.names[b] == nil then T.names[b] = buildingName(b) end
+			end
+		end
+		local account = depotAccount(d)
+		T.booked = nil
+		if not T.empty and T.coverageMs >= 2 * BOOKING_LUMP_MS then
+			T.booked = bookedMaintenance(account, now - T.coverageMs, now)
+		end
+		T.year = bookedMaintenance(account, now - win, now)
+		local function pct(x) return x and tostring(round(x * 1000)) or "" end
+		local sig = { tostring(T.empty), tostring(round(T.fee)), tostring(fee_rows.minutes(T.coverageMs)), tostring(T.sold) .. ":" .. round(T.soldFee),
+			tostring(T.booked and round(T.booked) or ""), tostring(T.year and round(T.year) or ""),
+			pct(T.goodShare), pct(T.fullShare), pct(T.elsewhereShare) }
+		for __, r in ipairs(T.rows) do
+			sig[#sig + 1] = tostring(r.v) .. ":" .. round(r.fee) .. ":" .. round(r.seconds) .. ":"
+				.. tostring(r.c0 and round(r.c0 * 100) or "") .. ":" .. tostring(r.c1 and round(r.c1 * 100) or "") .. ":" .. #r.elsewhere .. ":" .. tostring(T.lines[r.v])
+		end
+		T.sig = table.concat(sig, "|")
+		return T
+	end
+
+	-- long (user-chosen) vehicle names would widen the name column past the
+	-- card: cut to NAME_CHARS code points + "…", full name in the tooltip
+	local NAME_CHARS = 18
+	local function shorten(name)
+		local chars = {}
+		for ch in tostring(name):gmatch("[%z\1-\127\194-\244][\128-\191]*") do chars[#chars + 1] = ch end
+		if #chars <= NAME_CHARS then return name, false end
+		return table.concat(chars, "", 1, NAME_CHARS - 1) .. "…", true
+	end
+
+	-- condition as whole percent, at entry → when last seen in the pool: "53 → 100"
+	-- (a vehicle that left wears down again; "now" would blame the building)
+	local function conditionText(c0, c1)
+		local a = c0 and tostring(round(c0 * 100)) or "–"
+		local b = c1 and tostring(round(c1 * 100)) or "–"
+		return a .. " → " .. b
+	end
+
+	-- collapsed card: first line (fee, good share), second line (elsewhere) or nil
+	local function feeLines(T)
+		if T.empty then return _("running_costs_fee_none"), nil end
+		local fee = money(T.fee)
+		if T.goodShare == nil then return fmt("running_costs_fee_line_raw", { fee = fee }), nil end
+		local first = fmt("running_costs_fee_line", { fee = fee, pct = tostring(round(T.goodShare * 100)) })
+		if T.elsewhereShare == nil then return first, nil end
+		return first, fmt("running_costs_fee_elsewhere_line", { elsewhere = tostring(round(T.elsewhereShare * 100)) })
+	end
+
+	local FeeTable = react.RegisterRecipe("KampfmoehreRunningCostsFeeTable", function(p)
+		local state = react.useStateLazy(function() return feeData(p.building) end)
+		react.onStepTimer(function()
+			local now = feeData(p.building)
+			if now.sig ~= state:old().sig then state:set(now) end
+		end, SAMPLE_S)
+		local T = state:old()
+		local function cell(text, class)
+			return builtin.TextView{ meta = { class = class or "font-scale-body" }, text = text }
+		end
+		if T.empty then
+			return builtin.BoxLayout{ children = { cell(_("running_costs_fee_none")) } }
+		end
+		local children = {}
+		children[#children + 1] = builtin.Component{
+			meta = { tooltip = _("running_costs_header_tooltip") },
+			layout = builtin.BoxLayout{ children = { cell(fmt("running_costs_fee_header", { minutes = tostring(fee_rows.minutes(T.coverageMs)) })) } },
+		}
+		-- a TextView takes a tooltip directly (base: line_manager_panel.tl); a
+		-- Component wrapper would lose the text's right gravity in the cell
+		local function header(key, tipKey, numeric)
+			return builtin.TextView{
+				meta = { class = "font-scale-annotation" .. (numeric and ", kampfmoehre-rc-num" or ""), tooltip = _(tipKey) },
+				text = _(key),
+			}
+		end
+		-- rows carry a stable identity: when a vehicle row is appended, the
+		-- engine otherwise reuses the former sum row's nodes for it and shows
+		-- half-updated cells for a moment (fee in the minutes column)
+		local rows = { builtin.Row{ meta = { localKey = "head" }, cells = {
+			cell(_("running_costs_fee_col_vehicle"), "font-scale-annotation"),
+			header("running_costs_fee_col_minutes", "running_costs_fee_col_minutes_tooltip", true),
+			cell(_("running_costs_fee_col_fee"), "font-scale-annotation, kampfmoehre-rc-money"),
+			header("running_costs_fee_col_condition", "running_costs_fee_col_condition_tooltip", false),
+			header("running_costs_fee_col_elsewhere", "running_costs_fee_col_elsewhere_tooltip", true),
+		} } }
+		for __, r in ipairs(T.rows) do
+			local elsewhereCell
+			if #r.elsewhere > 0 then
+				local lines = { _("running_costs_fee_elsewhere_tooltip") }
+				for __, b in ipairs(r.elsewhere) do lines[#lines + 1] = T.names[b] or tostring(b) end
+				elsewhereCell = builtin.TextView{
+					meta = { class = "font-scale-body, kampfmoehre-rc-num", tooltip = table.concat(lines, "\n") },
+					text = tostring(#r.elsewhere),
+				}
+			else
+				elsewhereCell = cell("", "font-scale-body, kampfmoehre-rc-num")
+			end
+			-- the name opens the vehicle window like the game's own vehicle list
+			-- (entity_window_util.VehicleCell); full name and line in the tooltip
+			local fullName = entityName(r.v)
+			local shortName = shorten(fullName)
+			local tip = T.lines[r.v] and (fullName .. "\n" .. T.lines[r.v]) or fullName
+			local vehicle = r.v
+			local nameCell = builtin.Button{
+				meta = { class = "kampfmoehre-rc-namebutton", tooltip = tip },
+				content = builtin.BoxLayout{ children = { cell(shortName) } },
+				onClick = function()
+					react.fireEvent(nil, "selectEntity", { entity = vehicle, stack = true })
+				end,
+			}
+			rows[#rows + 1] = builtin.Row{ meta = { localKey = "v" .. tostring(r.v) }, cells = {
+				nameCell,
+				cell(tostring(fee_rows.minutes(r.seconds * 1000)), "font-scale-body, kampfmoehre-rc-num"),
+				cell(money(r.fee), "font-scale-body, negative, kampfmoehre-rc-money"),
+				cell(conditionText(r.c0, r.c1)),
+				elsewhereCell,
+			} }
+		end
+		if T.sold > 0 then
+			rows[#rows + 1] = builtin.Row{ meta = { localKey = "sold" }, cells = {
+				cell(fmt("running_costs_fee_sold", { n = tostring(T.sold) })),
+				cell(""),
+				cell(money(T.soldFee), "font-scale-body, negative, kampfmoehre-rc-money"),
+				cell(""), cell(""),
+			} }
+		end
+		rows[#rows + 1] = builtin.Row{ meta = { localKey = "sum" }, cells = {
+			cell(_("running_costs_sum"), "font-scale-body, bold"),
+			cell(""),
+			cell(money(T.fee), "font-scale-body, bold, negative, kampfmoehre-rc-money"),
+			cell(""), cell(""),
+		} }
+		-- the name column takes what the number columns leave
+		children[#children + 1] = builtin.TableLayout{ rows = rows, columnWeights = { 10, -1, -1, -1, -1 } }
+		if T.booked then
+			children[#children + 1] = cell(fmt("running_costs_booked", { amount = money(T.booked) }), "font-scale-annotation")
+		end
+		return builtin.BoxLayout{ orientation = builtin.type.Orientation.Vertical, children = children }
+	end)
+
+	local function sameFeeLine(a, b)
+		return a.line == b.line and a.second == b.second and a.tooltip == b.tooltip
+	end
+	local function feeLineData(d)
+		local T = feeData(d)
+		local line, second = feeLines(T)
+		return {
+			line = line,
+			second = second or false,
+			tooltip = fmt("running_costs_fee_tooltip", {
+				full = tostring(T.fullShare and round(T.fullShare * 100) or 0),
+				year = T.year and money(T.year) or "–",
+			}),
+		}
+	end
+
+	M.MaintenanceFeePlugin = react.RegisterPluginRecipe(
+		{ id = "::MaintenanceStationEowExtensionPoint" }, "KampfmoehreRunningCostsMaintenance",
+		function(params)
+			if params.ownershipState ~= "Player" then
+				return builtin.BoxLayout{ children = {} }
+			end
+			local state = react.useStateLazy(function() return feeLineData(params.entityId) end)
+			react.onStepTimer(function()
+				local now = feeLineData(params.entityId)
+				if not sameFeeLine(now, state:old()) then state:set(now) end
+			end, SAMPLE_S)
+			local L = state:old()
+			local canCollapse = type(params.getCollapsibleExpanded) == "function" and type(params.setCollapsibleExpanded) == "function"
+			-- two short lines: a long text next to the icon wraps at the full
+			-- width and overflows the card by the icon's width
+			local lines = {
+				builtin.BoxLayout{
+					orientation = builtin.type.Orientation.Horizontal,
+					children = {
+						builtin.ImageView{
+							path = "::/gui/entity_window/icons/symbol_dollar_gear.tga",
+							scaling = builtin.type.ImageViewScaling.AutoFit,
+						},
+						builtin.TextView{ meta = { class = "font-scale-body" }, text = "  " .. L.line },
+					},
+				},
+			}
+			if L.second then
+				lines[#lines + 1] = builtin.TextView{ meta = { class = "font-scale-annotation" }, text = L.second }
+			end
+			return builtin.BoxLayout{
+				meta = { class = "box-plugin-vertical-space" },
+				orientation = builtin.type.Orientation.Vertical,
+				children = {
+					content_card.ContentCard{
+						initialCalloutTextPermanent = "",
+						extraChildrenPermanent = {
+							builtin.Component{
+								meta = { tooltip = L.tooltip },
+								layout = builtin.BoxLayout{ orientation = builtin.type.Orientation.Vertical, children = lines },
+							},
+						},
+						initialCalloutTextCollapsible = canCollapse and "" or nil,
+						recipeAndParamCollapsible = canCollapse and content_card.makeRecipeAndParam(FeeTable, { building = params.entityId }) or nil,
+						setCollapsibleExpanded = canCollapse and function(v) params.setCollapsibleExpanded(FEE_CARD_KEY, v) end or nil,
+						collapsibleExpanded = canCollapse and params.getCollapsibleExpanded(FEE_CARD_KEY) or nil,
+						gameCtx = params.gameCtx,
+						showOnRightSide = params.showCalloutOnRightSide,
+					},
+				},
+			}
+		end)
+
+	log.message(LOG_PREFIX .. "v" .. VERSION .. " GUI loaded (vehicle row, balance card table, maintenance fee card)")
 
 	return M
 end
