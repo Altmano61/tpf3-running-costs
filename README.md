@@ -31,6 +31,9 @@ What the mod adds:
   data" and lists them in a tooltip.
 - No recommendations: the mod shows facts, you draw the conclusions (fewer
   vehicles, a cheaper or faster model, faster terminals, a different route).
+- **Depot and maintenance building windows (0.3.0):** a card with the
+  building's "Maintenance Vehicles" fee of the window and the share of it
+  charged for vehicles that were already in very good condition; see below.
 - Purely cosmetic, achievements stay enabled. English and German.
 
 The time window is one **default game year** (1461 s of game time), the unit
@@ -68,6 +71,35 @@ delivered nothing shows "no income yet" and a Result of minus its costs.
 There is deliberately no profit per cargo type: splitting the running costs
 between cargos would need an arbitrary key. The capacity column is there so
 you can compare "share of income" with "share of the train" yourself.
+
+## Maintenance fee (0.3.0)
+
+The finance category **"Maintenance Vehicles"** is not a repair price. Every
+depot and maintenance building charges **25 % of the running-cost rate of
+every vehicle inside its catchment area that holds one of its slots**, for
+as long as the vehicle stays there, parked or driving through, also when
+the vehicle is already at 100 % condition. On a large save 96 % of the
+charged pool entries were healthy vehicles whose lines merely cross a
+catchment area.
+
+The window of a depot or maintenance building therefore gets a card
+"Maintenance fee of the last N min of game time", collapsed:
+`€X · 87 % for vehicles already very good` and `40 % of that also covered
+elsewhere`. "Very good" is the game's own band (condition 0.8 and better);
+the share is taken from the fee charged while the vehicle was in that band,
+so the higher rate of a poor vehicle counts as poor. The tooltip adds the
+share for vehicles at exactly 100 % and the amount the game booked on the
+building in the last default year. Expanded, one row per vehicle that was
+in the pool during the window: minutes in the pool, its fee share,
+condition at entry and when last seen in the pool ("73 → 100"; a vehicle that
+left wears down again, so "now" would blame the building), and how
+many other buildings maintained it in the same window (names in the
+tooltip). A footnote shows the amount the game booked for the window.
+
+Reading it: a building whose fee mostly goes to vehicles that were already
+fine, and that are covered elsewhere too, costs money without benefit and
+can be moved or removed; a building whose rows start at low conditions earns
+its keep. The mod changes nothing about the pool.
 
 ## Installation
 
@@ -117,16 +149,37 @@ rate of a healthy vehicle.
   not seen into the income rings of its own state. A delivery therefore
   shows in the income table a few seconds late. The handler never returns a
   value, so prices are untouched.
+- Maintenance pools (0.3.0): the sampler asks every depot for its pool list
+  (`transportVehicleSystem.getVehiclesForMaintenanceStation`) each sample and
+  accumulates per building and vehicle the seconds listed, the fee
+  (25 % of the vehicle's running cost per second), the fee charged at
+  condition >= 0.8 and at 1.0, and the condition at the start of the latest
+  visit and when last seen. Not in the cost table's bucket ring: on a save
+  with 379 vehicles about 1300 (building, vehicle) pairs per 4-minute bucket
+  tripled the state copy time. Instead one entry per building and vehicle
+  with a sliding span (first/last sample); an entry older than the window is
+  cut down pro rata before new data is added, entries that ended before the
+  window are dropped every 60 s. Per vehicle the sampler also remembers which
+  buildings listed it in the window. The GUI
+  (`fee_rows.lua`) turns one building's ring into the card
+  (`::MaintenanceStationEowExtensionPoint`, order 55, below the vehicle list). The fee was measured on
+  a single truck: ratio 0.250 of the running-cost rate in every booking, and
+  on the large save as the median over 647 bookings.
 - `cost_classes.lua` is the single list of states, factors, texts and
   colours; the sampler and the GUI both iterate it, so later versions can add
   classes (e.g. speed buckets) without touching the table code.
 
-Cost, measured on a save with 364 vehicles: about 7 ms of one simulation
-pool thread every 3 s of game time (reading and writing the saved state is
-two thirds of it), no visible frame-rate change; the income collector adds
-about 0.3 ms per batch of paid items (7 batches per second of game time on
-that save, so ~2 ms per game second). Open windows
-read one small summary and one income ring per shown vehicle every 2 s.
+Cost, measured 2026-10-31 on a save with 379 vehicles, 121 lines and 48
+depots or maintenance buildings with the window full (the state stops
+growing after one default year): 0.2.0 takes about 18 ms of one simulation
+pool thread every 3 s of game time, 0.3.0 about 20 ms; reading and writing
+the saved state is 80 % of it (the game's copy costs roughly 0.7 µs per
+table, the state holds ~13 000 tables, mostly the cost histories and the
+income rings; the pool entries are about 5 % of the tables). No visible
+frame-rate change. The income collector adds about 0.2 ms per batch of paid
+items (~7 batches per second of game time on that save). Open windows read
+one small summary and one income ring per shown vehicle every 2 s; a
+building window reads its pool and one entry per listed vehicle.
 
 ## Development
 
