@@ -128,6 +128,98 @@ function M.window(h, nowMs, windowMs, factorOf, yearMs)
 	return out
 end
 
+-- maintenance pools (0.3.0). Every depot / maintenance building charges 25 %
+-- of the running-cost rate of each vehicle it lists, per second listed, also
+-- at condition 1.0 (measured 2026-10-30). Not a bucket ring: on the big save
+-- ~1300 (building, vehicle) pairs per 4-min bucket × 7 buckets tripled the
+-- state copy time. Instead one entry per vehicle with a sliding span:
+--   Pool = { first = ms the building was first seen, v = { [vehicle] = Entry } }
+--   Entry = { t0, t1 = first / last sample ms of the span, s = seconds, fee,
+--     gfee / ffee = fee charged while the condition was >= 0.8 / 1.0,
+--     c0 / c1 = condition at the start of the latest visit / when last seen }
+-- An entry older than the window is cut down pro rata to the window before
+-- new data is added, so it never represents more than one window (assuming
+-- its data is spread evenly over the span). A gap of more than GAP_MS between
+-- samples starts a new visit (c0 restarts).
+M.GAP_MS = 10000
+
+function M.newPool(nowMs)
+	return { first = nowMs or 0, v = {} }
+end
+
+-- cut the entry's span to [fromMs, t1] pro rata (nothing to cut if t0 >= fromMs)
+local function cutEntry(e, fromMs)
+	if e.t0 >= fromMs then return end
+	local f = 0
+	if e.t1 > fromMs and e.t1 > e.t0 then f = (e.t1 - fromMs) / (e.t1 - e.t0) end
+	e.s, e.fee, e.gfee, e.ffee = e.s * f, e.fee * f, e.gfee * f, e.ffee * f
+	e.t0 = math.min(fromMs, e.t1)
+end
+
+function M.addPool(pool, nowMs, dtMs, v, rcPerYear, cond, yearMs, windowMs)
+	pool.v = pool.v or {}
+	local e = pool.v[v]
+	if e == nil then
+		e = { t0 = nowMs - dtMs, t1 = nowMs, s = 0, fee = 0, gfee = 0, ffee = 0, c0 = cond }
+		pool.v[v] = e
+	else
+		if nowMs < e.t1 then   -- time stepped back: start over
+			e.t0, e.t1, e.s, e.fee, e.gfee, e.ffee, e.c0 = nowMs - dtMs, nowMs, 0, 0, 0, 0, cond
+		elseif nowMs - e.t1 > M.GAP_MS then
+			e.c0 = cond   -- a new visit
+		end
+		cutEntry(e, nowMs - windowMs)
+	end
+	local dt = dtMs / 1000
+	local fee = 0.25 * (rcPerYear or 0) * dtMs / yearMs
+	e.s = e.s + dt
+	e.fee = e.fee + fee
+	if cond ~= nil then
+		if cond >= 0.8 then e.gfee = e.gfee + fee end
+		if cond >= 1 - 1e-6 then e.ffee = e.ffee + fee end
+		e.c1 = cond
+	end
+	e.t1 = nowMs
+end
+
+-- -> { [v] = { s, fee, gfee, ffee, c0, c1 } } cut to the window [nowMs - windowMs,
+-- nowMs] (pro rata over the span), coverageMs counted from the building's first
+-- sight: it is checked every sample once it exists, quiet spans are normal
+function M.windowPool(pool, nowMs, windowMs)
+	local out = {}
+	if not pool or type(pool.v) ~= "table" then return out, 0 end
+	local from = nowMs - windowMs
+	for v, e in pairs(pool.v) do
+		if type(e) == "table" and e.t1 ~= nil and e.t1 > from then
+			local w = 1
+			if e.t0 < from then
+				w = (e.t1 > e.t0) and (e.t1 - from) / (e.t1 - e.t0) or 0
+			end
+			if w > 0 then
+				out[v] = { s = (e.s or 0) * w, fee = (e.fee or 0) * w, gfee = (e.gfee or 0) * w, ffee = (e.ffee or 0) * w,
+					c0 = e.c0, c1 = e.c1 }
+			end
+		end
+	end
+	local begin = math.max(from, pool.first or from)
+	local cov = math.max(0, math.min(windowMs, nowMs - begin))
+	return out, cov
+end
+
+-- drop entries that ended before the window (sampler sweep) -> number removed
+function M.prunePool(pool, nowMs, windowMs)
+	local n = 0
+	if not pool or type(pool.v) ~= "table" then return n end
+	local from = nowMs - windowMs
+	for v, e in pairs(pool.v) do
+		if type(e) ~= "table" or e.t1 == nil or e.t1 <= from then
+			pool.v[v] = nil
+			n = n + 1
+		end
+	end
+	return n
+end
+
 -- one paid item: base = basePrice × distance, ok = true/false (delivery
 -- quality) or nil (no quality, e.g. passengers)
 function M.addIncome(ring, nowMs, key, base, ok)

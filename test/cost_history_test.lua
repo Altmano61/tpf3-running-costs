@@ -193,6 +193,48 @@ check("consumed into the ring", M.windowIncome(rings[25245], 6 * M.BUCKET_MS + 5
 M.queueConsume(q2, rings, seen, 6 * M.BUCKET_MS + 40 + 120000)
 check("seen set pruned after a while", next(seen) == nil)
 
+-- maintenance pools (0.3.0): one entry per vehicle with a sliding span
+-- [t0, t1], not buckets (7 buckets × ~1300 pairs per bucket on the big save
+-- tripled the state copy time)
+local pr = M.newPool(0)                                  -- building first seen at 0
+M.addPool(pr, 3000, 3000, 7, 1461000, 0.5, Y, Y)         -- 3 s at 1 461 000/yr -> fee 0.25 × 3000 = 750
+M.addPool(pr, 6000, 3000, 7, 1461000, 0.85, Y, Y)        -- good
+M.addPool(pr, 9000, 3000, 7, 1461000, 1.0, Y, Y)         -- full
+M.addPool(pr, 9000, 3000, 8, 0, nil, Y, Y)               -- unknown rc / condition
+local P, cov = M.windowPool(pr, 9000, Y)
+near("pool seconds", P[7].s, 9, 1e-9); near("pool fee", P[7].fee, 2250, 1e-6)
+near("fee while good (exact share)", P[7].gfee, 1500, 1e-6); near("fee while full", P[7].ffee, 750, 1e-6)
+near("entry condition", P[7].c0, 0.5, 1e-9)
+near("exit condition = last seen in the pool", P[7].c1, 1.0, 1e-9)
+check("zero fee vehicle counted", P[8].s == 3 and P[8].fee == 0 and P[8].gfee == 0 and P[8].c0 == nil)
+near("pool coverage", cov, 9000, 1e-9)
+-- the span is cut pro rata at the window
+local pr2 = M.newPool(0)
+for t = 1000, 10000, 1000 do M.addPool(pr2, t, 1000, 7, Y, 0.3, Y, Y) end   -- span 0..10000, 10 s
+near("entry fully inside the window", M.windowPool(pr2, 10000, Y)[7].s, 10, 1e-9)
+near("entry cut at the window start", M.windowPool(pr2, 10000, 5000)[7].s, 5, 1e-9)
+check("entry that ended before the window is gone", M.windowPool(pr2, 20000, 5000)[7] == nil)
+-- an entry older than the window is truncated before new data is added
+M.addPool(pr2, 20000, 1000, 7, Y, 0.3, Y, 10000)       -- window 10 s: the old span 0..10000 ends at the new start
+near("truncated span: only the new second counts", M.windowPool(pr2, 20000, 10000)[7].s, 1, 1e-9)
+-- a new visit (gap > GAP_MS) restarts the entry condition
+local pr3 = M.newPool(0)
+M.addPool(pr3, 1000, 1000, 7, Y, 0.3, Y, Y)
+M.addPool(pr3, 2000, 1000, 7, Y, 0.4, Y, Y)
+near("c0 kept within a visit", M.windowPool(pr3, 2000, Y)[7].c0, 0.3, 1e-9)
+M.addPool(pr3, 2000 + M.GAP_MS + 1, 1000, 7, Y, 0.9, Y, Y)
+near("c0 of the latest visit", M.windowPool(pr3, 2000 + M.GAP_MS + 1, Y)[7].c0, 0.9, 1e-9)
+near("c1 = last seen", M.windowPool(pr3, 2000 + M.GAP_MS + 1, Y)[7].c1, 0.9, 1e-9)
+-- coverage counts from the first sight of the building, not from the data
+local pr4 = M.newPool(0)
+M.addPool(pr4, 600000, 3000, 7, Y, 1.0, Y, Y)             -- one drive-by, then nothing
+near("sparse ring: coverage since the ring began", select(2, M.windowPool(pr4, 1000000, Y)), 1000000, 1e-9)
+near("sparse ring: capped at the window", select(2, M.windowPool(pr4, 2 * Y, Y)), Y, 1e-9)
+-- pruning (sampler sweep) drops entries that ended before the window
+check("prune removes expired entries", M.prunePool(pr2, 40000, 10000) == 1 and next(pr2.v) == nil)
+check("prune keeps live entries", M.prunePool(pr4, 601000, Y) == 0 and pr4.v[7] ~= nil)
+check("empty pool ring", next((M.windowPool(M.newPool(0), 0, Y))) == nil and select(2, M.windowPool(nil, 0, Y)) == 0)
+
 if failures > 0 then
 	print(failures .. " failure(s)")
 	os.exit(1)
