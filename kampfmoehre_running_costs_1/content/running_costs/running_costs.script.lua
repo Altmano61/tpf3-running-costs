@@ -18,6 +18,8 @@
 --     inc = { [vehicle or "L<line>"] = Ring with bucket.inc } (income records consumed
 --           from income.script.lua's queue state), incSeen = { [recordId] = t },
 --     stat = { [vehicle] = { r = static rate per year, t = last check } },
+--     pool = { [building] = Pool (cost_history.newPool: one sliding-span entry per vehicle) },
+--     maintainedBy = { [vehicle] = { [building] = last seen ms } }, poolInfo = { buildings, entries }, poolStored,
 --     perf = { lastMs, maxMs } }
 -- Vehicles come from transportVehicleSystem.getVehiclesWithState (four lists)
 -- and getLine2VehicleMap; the TRANSPORT_VEHICLE component is only read when
@@ -26,10 +28,11 @@
 -- A version mismatch rebuilds the state from scratch.
 
 function data()
-	local VERSION = "0.2.0"
-	local STATE_VERSION = 3       -- 2: histories carry `first`; 3: income rings `inc` (0.2.0)
+	local VERSION = "0.3.0"
+	local STATE_VERSION = 5       -- 2: histories carry `first`; 3: income rings `inc` (0.2.0); 5: pools + maintainedBy (0.3.0; 4 = bucket rings, dev only)
 	local MAX_FAILS = 10          -- consecutive failed steps before the state is rebuilt
 	local SAMPLE_MS = 3000       -- game time between samples (8.5 ms per sample at 364 vehicles: state get 2.8, classify 2.8, set 2.9)
+	local SWEEP_MS = 60000       -- game time between sweeps of rings keyed by lines / buildings
 	local PERF_LOG_MS = 300000   -- game time between perf log lines
 	local LOG_PREFIX = "[kampfmoehre_running_costs] "
 
@@ -112,6 +115,45 @@ function data()
 		return api.type["enum"] and api.type["enum"].TransportVehicleState
 	end
 
+	-- maintenance pools (0.3.0): every depot / maintenance building charges
+	-- 25 % of the running cost of each vehicle it lists (CLAUDE.md "Maintenance
+	-- Vehicles"); one list call per building, one condition read per listed
+	-- vehicle. s.pool[d] = Pool (one sliding-span entry per vehicle, see
+	-- cost_history.addPool), s.maintainedBy[v] = { [d] = last seen ms } for the
+	-- "also covered elsewhere" marker.
+	local function samplePools(s, now, dtMs, rcOf, yearMs)
+		s.pool = s.pool or {}
+		s.maintainedBy = s.maintainedBy or {}
+		local buildings, entries = 0, 0
+		local okD, depots = pcall(api.engine.getEntitiesWithComponent, api.type.ComponentType.VEHICLE_DEPOT)
+		if not okD or type(depots) ~= "table" then return buildings, entries end
+		local tvs = api.engine.system.transportVehicleSystem
+		for __, d in ipairs(depots) do
+			local okL, list = pcall(tvs.getVehiclesForMaintenanceStation, d)
+			if okL and type(list) == "table" and #list > 0 then
+				buildings = buildings + 1
+				local pool = s.pool[d]
+				if pool == nil then
+					pool = history.newPool(now)
+					s.pool[d] = pool
+				end
+				for __, v in ipairs(list) do
+					entries = entries + 1
+					local okC, cond = pcall(api.engine.util.vehicle.getVehicleMaintenanceState, v)
+					if not okC or type(cond) ~= "number" then cond = nil end
+					history.addPool(pool, now, dtMs, v, rcOf[v] or 0, cond, yearMs, yearMs)
+					local mb = s.maintainedBy[v]
+					if mb == nil then
+						mb = {}
+						s.maintainedBy[v] = mb
+					end
+					mb[d] = now
+				end
+			end
+		end
+		return buildings, entries
+	end
+
 	local function sample(s, now, dtMs)
 		local yearMs = api.util.getDefaultYearDuration()
 		local tvs = api.engine.system.transportVehicleSystem
@@ -133,6 +175,7 @@ function data()
 			end
 		end
 		local count = 0
+		local rcOf = {}   -- running cost per vehicle, reused by the pool sampler
 		for v, name in pairs(stateOf) do
 			count = count + 1
 			local speed = 0
@@ -141,6 +184,7 @@ function data()
 			end
 			local key = classes.classify(name, speed)
 			local rc = api.engine.util.vehicle.getRunningCost(v) or 0
+			rcOf[v] = rc
 			local static = staticOf(s, v, now, rc)
 			if static <= 0 then static = rc end   -- unknown parts: no surcharge, cost at rc
 			local h = s.v[v]
@@ -163,20 +207,68 @@ function data()
 				s.summary[v] = nil
 				if s.stat then s.stat[v] = nil end
 				if s.inc then s.inc[v] = nil end
+				if s.maintainedBy then s.maintainedBy[v] = nil end
 			end
 		end
-		-- line-level income rings of lines that no longer exist (every ~60 s)
-		if s.inc and (s.incSweep or 0) + 60000 <= now then
-			s.incSweep = now
-			for k in pairs(s.inc) do
+		local buildings, entries = samplePools(s, now, dtMs, rcOf, yearMs)
+		s.poolInfo = { buildings = buildings, entries = entries }
+		-- every ~60 s: income rings of lines and pool rings of buildings that no
+		-- longer exist, maintainedBy entries older than the window
+		if (s.sweep or 0) + SWEEP_MS <= now then
+			s.sweep = now
+			for k in pairs(s.inc or {}) do
 				if type(k) == "string" then
 					local line = tonumber(k:match("^L(%d+)$"))
 					local okE, exists = line and pcall(api.engine.entityExists, line)
 					if not line or (okE and not exists) then s.inc[k] = nil end
 				end
 			end
+			local dropped = {}
+			local stored = 0
+			for d, pool in pairs(s.pool or {}) do
+				local okE, exists = pcall(api.engine.entityExists, d)
+				if okE and not exists then
+					s.pool[d] = nil
+					dropped[d] = true
+				else
+					history.prunePool(pool, now, yearMs)
+					for __ in pairs(pool.v or {}) do stored = stored + 1 end
+				end
+			end
+			s.poolStored = stored   -- entries kept in the state (perf line)
+			for v, mb in pairs(s.maintainedBy or {}) do
+				for d, t in pairs(mb) do
+					if dropped[d] or type(t) ~= "number" or now - t > yearMs then mb[d] = nil end
+				end
+				if next(mb) == nil then s.maintainedBy[v] = nil end
+			end
 		end
 		return count
+	end
+
+	-- size of a state subtree: tables and leaf values (perf line, every PERF_LOG_MS)
+	local function sizeOf(t)
+		local tables, values = 0, 0
+		local stack = { t }
+		while #stack > 0 do
+			local cur = table.remove(stack)
+			tables = tables + 1
+			for __, v in pairs(cur) do
+				if type(v) == "table" then stack[#stack + 1] = v else values = values + 1 end
+			end
+		end
+		return tables, values
+	end
+	local function stateSizes(s)
+		local parts = {}
+		for __, k in ipairs({ "v", "summary", "inc", "incSeen", "pool", "maintainedBy", "stat" }) do
+			if type(s[k]) == "table" then
+				local t, n = sizeOf(s[k])
+				parts[#parts + 1] = string.format("%s %d/%d", k, t, n)
+			end
+		end
+		local t, n = sizeOf(s)
+		return string.format("state %d tables / %d values (%s)", t, n, table.concat(parts, ", "))
 	end
 
 	local function step(state)
@@ -187,9 +279,9 @@ function data()
 		local s = state:get()
 		local tGet = clock:getTime() / 1000
 		if type(s) ~= "table" or s.version ~= STATE_VERSION or type(s.tSample) ~= "number" or s.tSample > now
-			or type(s.v) ~= "table" or type(s.summary) ~= "table" then
+			or type(s.v) ~= "table" or type(s.summary) ~= "table" or type(s.pool) ~= "table" then
 			s = { version = STATE_VERSION, tSample = now, tPerfLog = now, fails = 0,
-				v = {}, summary = {}, inc = {}, perf = { lastMs = 0, maxMs = 0 } }
+				v = {}, summary = {}, inc = {}, pool = {}, maintainedBy = {}, perf = { lastMs = 0, maxMs = 0 } }
 			state:set(s)
 			log("v" .. VERSION .. " sampler started (fresh state) at gameTime=" .. now)
 			return
@@ -224,8 +316,9 @@ function data()
 		if now - (s.tPerfLog or 0) >= PERF_LOG_MS then
 			s.tPerfLog = now
 			state:set(s)
-			log(string.format("perf: last sample %.2f ms (state get %.2f, classify %.2f, state set %.2f), max of logged samples %.2f ms, %d vehicles, %d income records consumed since the last line",
-				ms, tGet, tSample - tGet, ms - tSample, s.perf.maxMs, count, s.incItems or 0))
+			local pi = s.poolInfo or {}
+			log(string.format("perf: last sample %.2f ms (state get %.2f, classify %.2f, state set %.2f), max of logged samples %.2f ms, %d vehicles, %d buildings, %d pool entries (%d stored), %d income records consumed since the last line; %s",
+				ms, tGet, tSample - tGet, ms - tSample, s.perf.maxMs, count, pi.buildings or 0, pi.entries or 0, s.poolStored or 0, s.incItems or 0, stateSizes(s)))
 			s.incItems = 0
 		end
 	end
