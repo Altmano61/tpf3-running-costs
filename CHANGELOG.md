@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.3.1 (2026-10-31)
+
+- Smaller saved state, same display: each closed time bucket of the per-vehicle cost and income
+  histories is stored as one packed string instead of a table of fields, and the per-vehicle summaries
+  as flat fields. The game copies the whole sampler state in and out on every sample and pays per
+  element (measured with a probe, `docs/probes/state_probe/`), so the copy time halves: on a save with
+  ~380 vehicles the sampler takes about 15 ms instead of 20 ms per 3 s of game time on one simulation
+  thread, with the state at ~25 000 elements instead of ~54 000.
+- The perf log line now prints the mean over the samples since the previous line (and the share spent
+  in the history code), not one sample.
+- The saved history is rebuilt once on the first load with 0.3.1.
+
 ## 0.3.0 (2026-10-31)
 
 - Depot and maintenance building windows get a "Maintenance fee" card: the "Maintenance Vehicles"

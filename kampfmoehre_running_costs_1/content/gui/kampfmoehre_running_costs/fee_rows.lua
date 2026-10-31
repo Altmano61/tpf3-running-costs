@@ -69,6 +69,22 @@ function M.build(entries, building, maintainedBy, gone)
 	return out
 end
 
+-- the sampler stores maintainedBy as one flat table { ["<vehicle>:<building>"]
+-- = lastSeenMs } (one table instead of one per vehicle) -> { [building] = ms }
+function M.buildingsOf(flat, v)
+	local out = {}
+	if type(flat) ~= "table" then return out end
+	local prefix = tostring(v) .. ":"
+	local n = #prefix
+	for k, t in pairs(flat) do
+		if type(k) == "string" and k:sub(1, n) == prefix then
+			local b = tonumber(k:sub(n + 1))
+			if b then out[b] = t end
+		end
+	end
+	return out
+end
+
 -- game-time ms -> whole minutes for the header, at least 1 when there is data
 function M.minutes(ms)
 	ms = ms or 0

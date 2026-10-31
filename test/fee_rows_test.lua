@@ -46,6 +46,11 @@ near("sold vehicle: fee of hidden rows", TG.soldFee, 3000, 1e-9)
 near("sold vehicle: good share unchanged", TG.goodShare, (6000 * 0.5 + 3000 * 1.0) / 9000, 1e-9)
 check("demolished building not elsewhere", #TG.rows[1].elsewhere == 0 and TG.elsewhereShare == 0)
 check("all rows sold: not empty", M.build({ [8] = E[8] }, 1, MB, { [8] = true }).empty == false)
+-- maintainedBy is one flat table { ["<vehicle>:<building>"] = lastSeenMs } in the state
+local flatMb = { ["7:1"] = 5, ["7:2"] = 6, ["8:1"] = 9, ["17:3"] = 1 }
+local b7 = M.buildingsOf(flatMb, 7)
+check("buildings of a vehicle from the flat map", b7[1] == 5 and b7[2] == 6 and b7[3] == nil and next(M.buildingsOf(flatMb, 9)) == nil)
+check("buildingsOf tolerates nil", next(M.buildingsOf(nil, 7)) == nil)
 
 if failures > 0 then
 	print(failures .. " failure(s)")

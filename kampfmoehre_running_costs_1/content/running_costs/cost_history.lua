@@ -27,9 +27,70 @@ local function bucketStart(ms)
 end
 
 -- Ring = { start = ms of the first bucket, head = slot of the newest bucket
--- (0 = none), b = { [slot] = Bucket } }; a Bucket always has t0, the users
--- add their fields: costs t = {key = s}, r = rate/year, s = surcharge;
--- income inc = { [key] = { n, base, ok, q } }.
+-- (0 = none), b = { [slot] = packed Bucket } }. A Bucket is a table with t0
+-- and the users' fields (costs: t_<key> = seconds per class, n = all seconds,
+-- r = rate/year, s = surcharge; income: [cargo × 4 + field] = number), but it
+-- a CLOSED bucket is STORED as one string "t0=...;n=...;t_driving=..."
+-- (encode/decode): the game copies the whole state in and out on every
+-- sample at ~0.1-0.3 µs per element (table, value or string-keyed field
+-- alike, measured 2026-10-31 with a probe, docs/probes/state_probe/), so 389
+-- rings cost 2.5 ms as tables of fields and 0.5 ms as 7 strings each. The
+-- head bucket stays a table and is changed in place (packing it on every
+-- sample cost more Lua time than the copy saved); it is packed when the
+-- ring moves on. window() reads the strings through a small decode cache.
+local encode, decode
+
+function M.encode(b)
+	local parts = { "t0=" .. string.format("%d", b.t0 or 0) }
+	for k, v in pairs(b) do
+		if k ~= "t0" and type(v) == "number" then
+			parts[#parts + 1] = k .. "=" .. string.format("%.15g", v)
+		end
+	end
+	return table.concat(parts, ";")
+end
+encode = M.encode
+
+-- a fresh table from a packed bucket; a table (legacy bucket) passes through
+function M.decode(str)
+	if type(str) ~= "string" then return str end
+	local b = {}
+	for k, v in string.gmatch(str, "([^;=]+)=([^;]*)") do
+		b[tonumber(k) or k] = tonumber(v) or 0
+	end
+	return b
+end
+decode = M.decode
+
+-- read-only decode through a bounded per-Lua-state cache (window() decodes
+-- all buckets of every ring on every sample, only the head changes). Two
+-- generations: a full young generation becomes the old one, entries still
+-- in use move back on their next hit, so the warm set survives the overflow.
+local young, old, youngN = {}, {}, 0
+local CACHE_GEN = 4096
+local function remember(str, b)
+	if youngN >= CACHE_GEN then
+		old, young, youngN = young, {}, 0
+	end
+	young[str] = b
+	youngN = youngN + 1
+end
+local function cached(x)
+	if type(x) ~= "string" then return x end
+	local b = young[x]
+	if b ~= nil then return b end
+	b = old[x]
+	if b == nil then b = decode(x) end
+	remember(x, b)
+	return b
+end
+
+local function t0Of(x)
+	if type(x) == "table" then return x.t0 end
+	if type(x) ~= "string" then return nil end
+	return tonumber(string.match(x, "^t0=(%-?%d+)"))
+end
+
 function M.newRing(nowMs)
 	return { start = bucketStart(nowMs or 0), head = 0, b = {} }
 end
@@ -42,20 +103,30 @@ function M.new(nowMs)
 	return h
 end
 
--- the bucket for nowMs, opening it (reusing the oldest slot) when needed;
--- a step back in time starts the ring over
+-- the head bucket for nowMs (a table, changed in place) plus its slot,
+-- opening it (reusing the oldest slot, packing the old head) when needed; a
+-- step back in time starts the ring over.
 function M.bucketFor(h, nowMs)
 	local t0 = bucketStart(nowMs)
 	local cur = h.head > 0 and h.b[h.head] or nil
-	if cur and cur.t0 == t0 then return cur end
-	if nowMs < h.start or (cur and t0 < cur.t0) then
+	local curT0 = cur and t0Of(cur)
+	if cur and curT0 == t0 then
+		if type(cur) == "string" then   -- legacy / foreign: unpack it for good
+			cur = decode(cur)
+			h.b[h.head] = cur
+		end
+		return cur, h.head
+	end
+	if nowMs < h.start or (cur and curT0 and t0 < curT0) then
 		h.start, h.head, h.b = t0, 0, {}
 		if h.first ~= nil then h.first = nowMs end
+	elseif type(cur) == "table" then
+		h.b[h.head] = encode(cur)   -- close the old head
 	end
 	h.head = h.head % M.BUCKETS + 1
 	local nb = { t0 = t0 }
 	h.b[h.head] = nb
-	return nb
+	return nb, h.head
 end
 local bucketFor = M.bucketFor
 
@@ -79,15 +150,42 @@ end
 -- dtMs of game time spent in class `key` at costPerYearStatic (the healthy
 -- rate; a consist change inside one bucket is attributed to the new rate)
 -- with surchargePerYear on top, charged at `factor`
+local fieldT, fieldC = {}, {}   -- "t_<key>" / "c_<key>", interned once
+local function tField(key)
+	local f = fieldT[key]
+	if f == nil then
+		f = "t_" .. key
+		fieldT[key] = f
+	end
+	return f
+end
+local function cField(key)
+	local f = fieldC[key]
+	if f == nil then
+		f = "c_" .. key
+		fieldC[key] = f
+	end
+	return f
+end
+-- the class keys stored in a bucket or flat summary (fields "t_<key>")
+local function flatKeys(t)
+	local keys = {}
+	for k in pairs(t) do
+		if type(k) == "string" and k:byte(1) == 116 and k:byte(2) == 95 then keys[#keys + 1] = k:sub(3) end
+	end
+	return keys
+end
+
 function M.add(h, nowMs, dtMs, key, costPerYearStatic, surchargePerYear, factor, yearMs)
-	local b = bucketFor(h, nowMs)
-	b.t = b.t or {}
+	local b, slot = bucketFor(h, nowMs)
 	b.r = b.r or 0
 	b.s = b.s or 0
-	local before = 0
-	for __, v in pairs(b.t) do before = before + v end
+	b.n = b.n or 0
+	local before = b.n
 	local dt = dtMs / 1000
-	b.t[key] = (b.t[key] or 0) + dt
+	local f = tField(key)
+	b[f] = (b[f] or 0) + dt
+	b.n = b.n + dt
 	-- the bucket's rate is the seconds-weighted mean, so a consist change
 	-- inside a bucket keeps the old rate for the seconds before it
 	if before + dt > 0 then
@@ -96,25 +194,30 @@ function M.add(h, nowMs, dtMs, key, costPerYearStatic, surchargePerYear, factor,
 	b.s = (b.s or 0) + (surchargePerYear or 0) * dtMs / yearMs * factor
 end
 
--- factorOf(key) -> the class factor, yearMs -> the default year ->
+-- factorOf(key) -> the class factor, yearMs -> the default year, keys = the
+-- class keys to read (optional; without it the bucket's fields are scanned) ->
 -- Summary = { cov = covered ms (<= windowMs), t = {key = s}, c = {key = cost},
 --   s = surcharge, total = sum of c + s }
-function M.window(h, nowMs, windowMs, factorOf, yearMs)
+function M.window(h, nowMs, windowMs, factorOf, yearMs, keys)
 	local out = { cov = 0, t = {}, c = {}, s = 0, total = 0 }
 	if not h or type(h.b) ~= "table" then return out end
 	local from = nowMs - windowMs
 	local oldest = nil
-	for __, b in pairs(h.b) do
+	for __, packed in pairs(h.b) do
+		local b = cached(packed)
 		local weight = (type(b) == "table" and b.t0) and M.bucketWeight(b.t0, nowMs, windowMs, h.first) or 0
 		if weight > 0 then
 			if oldest == nil or b.t0 < oldest then oldest = b.t0 end
 			local perSecond = (b.r or 0) / yearMs * 1000
-			for k, v in pairs(b.t or {}) do
-				local sec = v * weight
-				out.t[k] = (out.t[k] or 0) + sec
-				local cost = sec * factorOf(k) * perSecond
-				out.c[k] = (out.c[k] or 0) + cost
-				out.total = out.total + cost
+			for __, k in ipairs(keys or flatKeys(b)) do
+				local v = b[tField(k)]
+				if v then
+					local sec = v * weight
+					out.t[k] = (out.t[k] or 0) + sec
+					local cost = sec * factorOf(k) * perSecond
+					out.c[k] = (out.c[k] or 0) + cost
+					out.total = out.total + cost
+				end
 			end
 			out.s = out.s + (b.s or 0) * weight
 		end
@@ -220,54 +323,77 @@ function M.prunePool(pool, nowMs, windowMs)
 	return n
 end
 
+-- the summary as stored in the state: t/c sub-tables flattened to t_<key> /
+-- c_<key> fields (two tables per vehicle saved); inflate() reverses it
+function M.deflateSummary(w)
+	local out = {}
+	for k, v in pairs(w) do
+		if k == "t" then
+			for key, sec in pairs(v) do out[tField(key)] = sec end
+		elseif k == "c" then
+			for key, cost in pairs(v) do out[cField(key)] = cost end
+		else
+			out[k] = v
+		end
+	end
+	return out
+end
+
+function M.inflateSummary(flat)
+	if type(flat) ~= "table" then return flat end
+	if type(flat.t) == "table" and type(flat.c) == "table" then return flat end   -- already a summary
+	local out = { t = {}, c = {} }
+	for k, v in pairs(flat) do
+		if type(k) == "string" and k:byte(2) == 95 and (k:byte(1) == 116 or k:byte(1) == 99) then
+			if k:byte(1) == 116 then out.t[k:sub(3)] = v else out.c[k:sub(3)] = v end
+		else
+			out[k] = v
+		end
+	end
+	return out
+end
+
+-- income bucket: [cargo × 4 + field] with fields 0 = n, 1 = base, 2 = ok,
+-- 3 = q (cargo type ids are small non-negative integers)
+local function incAdd(b, key, n, base, ok, q)
+	key = tonumber(key)
+	if key == nil then return end
+	local k = key * 4
+	b[k] = (b[k] or 0) + (n or 0)
+	b[k + 1] = (b[k + 1] or 0) + (base or 0)
+	b[k + 2] = (b[k + 2] or 0) + (ok or 0)
+	b[k + 3] = (b[k + 3] or 0) + (q or 0)
+end
+
 -- one paid item: base = basePrice × distance, ok = true/false (delivery
 -- quality) or nil (no quality, e.g. passengers)
 function M.addIncome(ring, nowMs, key, base, ok)
-	local b = bucketFor(ring, nowMs)
-	b.inc = b.inc or {}
-	local e = b.inc[key]
-	if e == nil then
-		e = { n = 0, base = 0, ok = 0, q = 0 }
-		b.inc[key] = e
-	end
-	e.n = e.n + 1
-	e.base = e.base + (base or 0)
-	if ok ~= nil then
-		e.q = e.q + 1
-		if ok == true then e.ok = e.ok + 1 end
-	end
+	incAdd((bucketFor(ring, nowMs)), key, 1, base, ok == true and 1 or 0, ok ~= nil and 1 or 0)
 end
 
 -- the bucket for an event time that may lie behind the newest bucket (the
 -- income collector flushes per-thread buffers up to a flush interval late):
 -- the bucket holding tMs if it still exists, a new bucket when tMs is newer
 -- than the head, else the head bucket (a few seconds misattributed instead
--- of resetting the ring)
+-- of resetting the ring). A closed (packed) bucket comes back decoded with
+-- packed = true: the caller re-encodes it.
 local function bucketAt(ring, tMs)
 	local t0 = bucketStart(tMs)
 	local cur = ring.head > 0 and ring.b[ring.head] or nil
-	if cur == nil or t0 > cur.t0 then return bucketFor(ring, tMs) end
-	if cur.t0 == t0 then return cur end
-	for __, b in pairs(ring.b) do
-		if type(b) == "table" and b.t0 == t0 then return b end
+	local curT0 = cur and t0Of(cur)
+	if cur == nil or curT0 == nil or t0 >= curT0 then return bucketFor(ring, tMs) end
+	for slot, b in pairs(ring.b) do
+		if t0Of(b) == t0 then return decode(b), slot, type(b) == "string" end
 	end
-	return cur
+	return bucketFor(ring, curT0)   -- older than the ring: the head, no reset
 end
 
 -- n items of cargo `key` paid at tMs with Σ base, ok of them on time, q of
 -- them with a known quality (buffered counts; see addIncome for single items)
 function M.addIncomeCounts(ring, tMs, key, n, base, ok, q)
-	local b = bucketAt(ring, tMs)
-	b.inc = b.inc or {}
-	local e = b.inc[key]
-	if e == nil then
-		e = { n = 0, base = 0, ok = 0, q = 0 }
-		b.inc[key] = e
-	end
-	e.n = e.n + (n or 0)
-	e.base = e.base + (base or 0)
-	e.ok = e.ok + (ok or 0)
-	e.q = e.q + (q or 0)
+	local b, slot, packed = bucketAt(ring, tMs)
+	incAdd(b, key, n, base, ok, q)
+	if packed then ring.b[slot] = encode(b) end
 end
 
 -- income inside the window, weighted like the costs; `first` is the cost
@@ -275,19 +401,24 @@ end
 function M.windowIncome(ring, nowMs, windowMs, first)
 	local out = {}
 	if not ring or type(ring.b) ~= "table" then return out end
-	for __, b in pairs(ring.b) do
+	for __, packed in pairs(ring.b) do
+		local b = cached(packed)
 		local weight = (type(b) == "table" and b.t0) and M.bucketWeight(b.t0, nowMs, windowMs, first) or 0
-		if weight > 0 and type(b.inc) == "table" then
-			for k, e in pairs(b.inc) do
-				local o = out[k]
-				if o == nil then
-					o = { n = 0, base = 0, ok = 0, q = 0 }
-					out[k] = o
+		if weight > 0 then
+			for k, v in pairs(b) do
+				if type(k) == "number" and type(v) == "number" then
+					local key = math.floor(k / 4)
+					local field = k - key * 4
+					local o = out[key]
+					if o == nil then
+						o = { n = 0, base = 0, ok = 0, q = 0 }
+						out[key] = o
+					end
+					if field == 0 then o.n = o.n + v * weight
+					elseif field == 1 then o.base = o.base + v * weight
+					elseif field == 2 then o.ok = o.ok + v * weight
+					else o.q = o.q + v * weight end
 				end
-				o.n = o.n + (e.n or 0) * weight
-				o.base = o.base + (e.base or 0) * weight
-				o.ok = o.ok + (e.ok or 0) * weight
-				o.q = o.q + (e.q or 0) * weight
 			end
 		end
 	end

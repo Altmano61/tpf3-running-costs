@@ -14,13 +14,13 @@
 -- game-script state (saved with the game). State layout:
 --   { version, tSample, tPerfLog, fails,
 --     v = { [vehicle] = History },
---     summary = { [vehicle] = Summary + { line, rc, static, key, first } },
+--     summary = { [vehicle] = flat Summary (cost_history.deflateSummary) + { line, rc, static, key, first } },
 --     inc = { [vehicle or "L<line>"] = Ring with bucket.inc } (income records consumed
 --           from income.script.lua's queue state), incSeen = { [recordId] = t },
---     stat = { [vehicle] = { r = static rate per year, t = last check } },
+--     statR = { [vehicle] = static rate per year }, statT = { [vehicle] = ms of the last check },
 --     pool = { [building] = Pool (cost_history.newPool: one sliding-span entry per vehicle) },
---     maintainedBy = { [vehicle] = { [building] = last seen ms } }, poolInfo = { buildings, entries }, poolStored,
---     perf = { lastMs, maxMs } }
+--     mb = { ["<vehicle>:<building>"] = last seen ms } (one flat table), poolInfo = { buildings, entries }, poolStored,
+--     perf = { lastMs, n, get, cls, lua, set, setN = sums since the last perf line } }
 -- Vehicles come from transportVehicleSystem.getVehiclesWithState (four lists)
 -- and getLine2VehicleMap; the TRANSPORT_VEHICLE component is only read when
 -- the static rate is (re)checked, every STATIC_RECHECK_MS or when the running
@@ -28,12 +28,14 @@
 -- A version mismatch rebuilds the state from scratch.
 
 function data()
-	local VERSION = "0.3.0"
-	local STATE_VERSION = 5       -- 2: histories carry `first`; 3: income rings `inc` (0.2.0); 5: pools + maintainedBy (0.3.0; 4 = bucket rings, dev only)
+	local VERSION = "0.3.1"
+	local STATE_VERSION = 7       -- 2: histories carry `first`; 3: income rings `inc` (0.2.0); 5: pools + maintainedBy (0.3.0); 6/7: flat summaries, buckets packed into strings (0.3.1)
 	local MAX_FAILS = 10          -- consecutive failed steps before the state is rebuilt
 	local SAMPLE_MS = 3000       -- game time between samples (8.5 ms per sample at 364 vehicles: state get 2.8, classify 2.8, set 2.9)
 	local SWEEP_MS = 60000       -- game time between sweeps of rings keyed by lines / buildings
 	local PERF_LOG_MS = 300000   -- game time between perf log lines
+	local pendingSet = nil       -- set time of this thread's previous sample, not yet summed
+	local luaMs = 0              -- time inside cost_history (add + window) of the current sample
 	local LOG_PREFIX = "[kampfmoehre_running_costs] "
 
 	local classes = ug_require "kampfmoehre_running_costs_1::/running_costs/cost_classes.lua"
@@ -97,19 +99,24 @@ function data()
 	local STATIC_RECHECK_MS = 60000
 	local MAX_PENALTY_FACTOR = 1.3
 	local function staticOf(s, v, now, rc)
-		s.stat = s.stat or {}
-		local e = s.stat[v]
+		s.statR = s.statR or {}
+		s.statT = s.statT or {}
+		local r, t = s.statR[v], s.statT[v]
 		-- recheck early when rc dropped below the static rate (consist shrunk)
 		-- or rose further above it than the condition penalty can explain
 		-- (consist grew; the penalty tops out around +23 %)
-		if e and now - (e.t or 0) < STATIC_RECHECK_MS and rc >= (e.r or 0) and rc <= (e.r or 0) * MAX_PENALTY_FACTOR then
-			return e.r
+		if r and now - (t or 0) < STATIC_RECHECK_MS and rc >= r and rc <= r * MAX_PENALTY_FACTOR then
+			return r
 		end
 		local tv = api.engine.getComponent(v, api.type.ComponentType.TRANSPORT_VEHICLE)
-		local r = tv and staticPerYear(tv) or 0
-		s.stat[v] = { r = r, t = now }
+		r = tv and staticPerYear(tv) or 0
+		s.statR[v], s.statT[v] = r, now
 		return r
 	end
+
+	-- class keys for cost_history.window (fast path, no field scan)
+	local CLASS_KEYS = {}
+	for i, cl in ipairs(classes.CLASSES) do CLASS_KEYS[i] = cl.key end
 
 	local function vehicleStateEnum()
 		return api.type["enum"] and api.type["enum"].TransportVehicleState
@@ -119,11 +126,11 @@ function data()
 	-- 25 % of the running cost of each vehicle it lists (CLAUDE.md "Maintenance
 	-- Vehicles"); one list call per building, one condition read per listed
 	-- vehicle. s.pool[d] = Pool (one sliding-span entry per vehicle, see
-	-- cost_history.addPool), s.maintainedBy[v] = { [d] = last seen ms } for the
-	-- "also covered elsewhere" marker.
+	-- cost_history.addPool), s.mb["<v>:<d>"] = last seen ms for the "also
+	-- covered elsewhere" marker (one flat table instead of one per vehicle).
 	local function samplePools(s, now, dtMs, rcOf, yearMs)
 		s.pool = s.pool or {}
-		s.maintainedBy = s.maintainedBy or {}
+		s.mb = s.mb or {}
 		local buildings, entries = 0, 0
 		local okD, depots = pcall(api.engine.getEntitiesWithComponent, api.type.ComponentType.VEHICLE_DEPOT)
 		if not okD or type(depots) ~= "table" then return buildings, entries end
@@ -142,12 +149,7 @@ function data()
 					local okC, cond = pcall(api.engine.util.vehicle.getVehicleMaintenanceState, v)
 					if not okC or type(cond) ~= "number" then cond = nil end
 					history.addPool(pool, now, dtMs, v, rcOf[v] or 0, cond, yearMs, yearMs)
-					local mb = s.maintainedBy[v]
-					if mb == nil then
-						mb = {}
-						s.maintainedBy[v] = mb
-					end
-					mb[d] = now
+					s.mb[v .. ":" .. d] = now
 				end
 			end
 		end
@@ -176,6 +178,8 @@ function data()
 		end
 		local count = 0
 		local rcOf = {}   -- running cost per vehicle, reused by the pool sampler
+		local luaClock = api.type.Clock.new()
+		luaMs = 0
 		for v, name in pairs(stateOf) do
 			count = count + 1
 			local speed = 0
@@ -192,22 +196,33 @@ function data()
 				h = history.new(now)
 				s.v[v] = h
 			end
+			local tLua = luaClock:getTime()
 			history.add(h, now, dtMs, key, static, math.max(0, rc - static), classes.factor(key), yearMs)
-			local w = history.window(h, now, yearMs, classes.factor, yearMs)
+			local w = history.window(h, now, yearMs, classes.factor, yearMs, CLASS_KEYS)
+			luaMs = luaMs + (luaClock:getTime() - tLua) / 1000
 			w.line = lineOf[v] or -1
 			w.first = h.first   -- the income table (0.2.0) shares this window
 			w.rc = rc
 			w.static = static
 			w.key = key
-			s.summary[v] = w
+			s.summary[v] = history.deflateSummary(w)   -- flat in the state, inflated by the GUI
 		end
+		local gone = nil   -- vehicles that left since the last sample
 		for v in pairs(s.v) do
 			if not stateOf[v] then
 				s.v[v] = nil
 				s.summary[v] = nil
-				if s.stat then s.stat[v] = nil end
+				if s.statR then s.statR[v] = nil end
+				if s.statT then s.statT[v] = nil end
 				if s.inc then s.inc[v] = nil end
-				if s.maintainedBy then s.maintainedBy[v] = nil end
+				gone = gone or {}
+				gone[tostring(v) .. ":"] = true
+			end
+		end
+		if gone and s.mb then
+			for k in pairs(s.mb) do
+				local prefix = k:match("^%d+:")
+				if prefix and gone[prefix] then s.mb[k] = nil end
 			end
 		end
 		local buildings, entries = samplePools(s, now, dtMs, rcOf, yearMs)
@@ -236,11 +251,9 @@ function data()
 				end
 			end
 			s.poolStored = stored   -- entries kept in the state (perf line)
-			for v, mb in pairs(s.maintainedBy or {}) do
-				for d, t in pairs(mb) do
-					if dropped[d] or type(t) ~= "number" or now - t > yearMs then mb[d] = nil end
-				end
-				if next(mb) == nil then s.maintainedBy[v] = nil end
+			for k, t in pairs(s.mb or {}) do
+				local d = tonumber(k:match(":(%d+)$"))
+				if d == nil or dropped[d] or type(t) ~= "number" or now - t > yearMs then s.mb[k] = nil end
 			end
 		end
 		return count
@@ -261,7 +274,7 @@ function data()
 	end
 	local function stateSizes(s)
 		local parts = {}
-		for __, k in ipairs({ "v", "summary", "inc", "incSeen", "pool", "maintainedBy", "stat" }) do
+		for __, k in ipairs({ "v", "summary", "inc", "incSeen", "pool", "mb", "statR", "statT" }) do
 			if type(s[k]) == "table" then
 				local t, n = sizeOf(s[k])
 				parts[#parts + 1] = string.format("%s %d/%d", k, t, n)
@@ -281,7 +294,7 @@ function data()
 		if type(s) ~= "table" or s.version ~= STATE_VERSION or type(s.tSample) ~= "number" or s.tSample > now
 			or type(s.v) ~= "table" or type(s.summary) ~= "table" or type(s.pool) ~= "table" then
 			s = { version = STATE_VERSION, tSample = now, tPerfLog = now, fails = 0,
-				v = {}, summary = {}, inc = {}, pool = {}, maintainedBy = {}, perf = { lastMs = 0, maxMs = 0 } }
+				v = {}, summary = {}, inc = {}, pool = {}, mb = {}, statR = {}, statT = {}, perf = { lastMs = 0, maxMs = 0 } }
 			state:set(s)
 			log("v" .. VERSION .. " sampler started (fresh state) at gameTime=" .. now)
 			return
@@ -308,18 +321,37 @@ function data()
 		end
 		s.fails = 0
 		local tSample = clock:getTime() / 1000
+		-- perf sums live in the state, so they must be written before the set;
+		-- the set time of a sample is only known afterwards and is carried in
+		-- a module local to this thread's next sample (counted separately)
+		local perf = s.perf or { lastMs = 0, maxMs = 0 }
+		s.perf = perf
+		perf.n = (perf.n or 0) + 1
+		perf.get = (perf.get or 0) + tGet
+		perf.cls = (perf.cls or 0) + (tSample - tGet)
+		perf.lua = (perf.lua or 0) + luaMs
+		if pendingSet then
+			perf.setN = (perf.setN or 0) + 1
+			perf.set = (perf.set or 0) + pendingSet
+			pendingSet = nil
+		end
+		local logNow = now - (s.tPerfLog or 0) >= PERF_LOG_MS
+		if logNow then s.tPerfLog = now end
 		state:set(s)
 		local ms = clock:getTime() / 1000
-		s.perf = s.perf or { lastMs = 0, maxMs = 0 }
-		s.perf.lastMs = ms
-		if ms > (s.perf.maxMs or 0) then s.perf.maxMs = ms end
-		if now - (s.tPerfLog or 0) >= PERF_LOG_MS then
-			s.tPerfLog = now
-			state:set(s)
+		pendingSet = ms - tSample
+		if logNow then
+			perf.setN = (perf.setN or 0) + 1
+			perf.set = (perf.set or 0) + pendingSet
+			pendingSet = nil
+			local n, setN = math.max(1, perf.n or 1), math.max(1, perf.setN or 1)
+			local meanGet, meanCls, meanSet = perf.get / n, perf.cls / n, perf.set / setN
 			local pi = s.poolInfo or {}
-			log(string.format("perf: last sample %.2f ms (state get %.2f, classify %.2f, state set %.2f), max of logged samples %.2f ms, %d vehicles, %d buildings, %d pool entries (%d stored), %d income records consumed since the last line; %s",
-				ms, tGet, tSample - tGet, ms - tSample, s.perf.maxMs, count, pi.buildings or 0, pi.entries or 0, s.poolStored or 0, s.incItems or 0, stateSizes(s)))
+			log(string.format("perf: mean of %d samples %.2f ms (state get %.2f, classify %.2f of which history %.2f, state set %.2f), last %.2f ms, %d vehicles, %d buildings, %d pool entries (%d stored), %d income records consumed since the last line; %s",
+				n, meanGet + meanCls + meanSet, meanGet, meanCls, (perf.lua or 0) / n, meanSet, ms, count, pi.buildings or 0, pi.entries or 0, s.poolStored or 0, s.incItems or 0, stateSizes(s)))
+			perf.lastMs, perf.n, perf.get, perf.cls, perf.lua, perf.set, perf.setN = ms, 0, 0, 0, 0, 0, 0
 			s.incItems = 0
+			state:set(s)   -- the reset sums and counters (a second copy, once per PERF_LOG_MS)
 		end
 	end
 

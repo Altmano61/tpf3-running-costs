@@ -22,7 +22,7 @@
 -- live values) and fee_rows.lua (maintenance card), all unit-tested with luajit.
 
 function data()
-	local VERSION = "0.3.0"
+	local VERSION = "0.3.1"
 	local SAMPLE_S = 2     -- seconds between reads of the sampler state / table refreshes
 	local LOG_PREFIX = "[kampfmoehre_running_costs] "
 	local GS_NAME = "kampfmoehre_running_costs_1::/running_costs/running_costs.gs"
@@ -267,7 +267,7 @@ function data()
 					if type(ring) == "table" and type(ring.b) == "table" then
 						for __, b in pairs(ring.b) do
 							nb = nb + 1
-							for k in pairs(b.inc or {}) do keys[#keys + 1] = tostring(k) end
+							for k in pairs(cost_history.decode(b) or {}) do keys[#keys + 1] = tostring(k) end
 						end
 					end
 					log.message(LOG_PREFIX .. string.format("debug ring v=%s gsI=%s ring=%s buckets=%d keys=%s first=%s now=%d",
@@ -320,7 +320,7 @@ function data()
 				if type(w) == "table" then
 					if nativeWorks == nil then logReadPath("state_native:findPath per vehicle") end
 					nativeWorks = true
-					return w
+					return cost_history.inflateSummary(w)
 				elseif w == false then
 					-- the state exists but has no entry for this vehicle (yet)
 					if nativeWorks == nil then logReadPath("state_native:findPath per vehicle") end
@@ -336,7 +336,7 @@ function data()
 		end
 		local all = copiedSummaries()
 		if not all then return nil end
-		return all[v] or all[tostring(v)]
+		return cost_history.inflateSummary(all[v] or all[tostring(v)])
 	end
 
 	local function lineVehicles(line)
@@ -716,14 +716,14 @@ function data()
 	local FEE_CARD_KEY = "kampfmoehreRunningCostsFee"
 	local poolNativeFailed = false
 	local poolCopy = { time = nil, st = nil }
-	-- state[key][sub] of the sampler, or nil
+	-- state[key][sub] of the sampler (state[key] when sub is nil), or nil
 	local function stateEntry(gs, key, sub)
 		if not gs then return nil end
 		if not poolNativeFailed then
 			local ok, r = pcall(function()
 				local native = gs.state_native
 				if native == nil then return "nostate" end
-				local nv = native:findPath({ key, sub })
+				local nv = native:findPath(sub ~= nil and { key, sub } or { key })
 				if nv == nil then return false end
 				return nv:asTable()
 			end)
@@ -741,6 +741,7 @@ function data()
 		end
 		local t = poolCopy.st and poolCopy.st[key]
 		if type(t) ~= "table" then return nil end
+		if sub == nil then return t end
 		return t[sub] or t[tostring(sub)]
 	end
 
@@ -795,12 +796,11 @@ function data()
 			gone[e] = (ok and ex == false) or false
 			return not gone[e]
 		end
+		local flatMb = stateEntry(gs, "mb")   -- one flat table for all vehicles
 		for v in pairs(entries) do
 			exists(v)
-			local set = stateEntry(gs, "maintainedBy", v)
-			if type(set) == "table" then
-				for b in pairs(set) do exists(b) end
-			end
+			local set = fee_rows.buildingsOf(flatMb, v)
+			for b in pairs(set) do exists(b) end
 			mb[v] = set
 		end
 		local T = fee_rows.build(entries, d, mb, gone)

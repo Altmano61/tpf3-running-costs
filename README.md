@@ -169,13 +169,18 @@ rate of a healthy vehicle.
   colours; the sampler and the GUI both iterate it, so later versions can add
   classes (e.g. speed buckets) without touching the table code.
 
-Cost, measured 2026-10-31 on a save with 379 vehicles, 121 lines and 48
-depots or maintenance buildings with the window full (the state stops
-growing after one default year): 0.2.0 takes about 18 ms of one simulation
-pool thread every 3 s of game time, 0.3.0 about 20 ms; reading and writing
-the saved state is 80 % of it (the game's copy costs roughly 0.7 µs per
-table, the state holds ~13 000 tables, mostly the cost histories and the
-income rings; the pool entries are about 5 % of the tables). No visible
+Cost, measured 2026-10-31 on a save with about 380 vehicles, 121 lines and
+48 depots or maintenance buildings with the window full (the state stops
+growing after one default year), mean over 100 samples: 0.3.1 takes about
+15 ms of one simulation pool thread every 3 s of game time (0.3.0 about
+20 ms, 0.2.0 about 18 ms). Reading and writing the saved state is about
+8.5 ms of it (15.8 ms in 0.3.0): the game's copy costs 0.1-0.3 µs per
+element, a table, a number or a string alike (`docs/probes/state_probe/`),
+so 0.3.1 stores each closed time bucket of the cost and income histories as
+one packed string ("t0=...;n=...;t_driving=...") and only the current bucket
+as a table; the state shrank from ~54 000 to ~25 000 elements. The rest is
+engine queries (~3 ms) and the Lua of the histories (~3.7 ms: adding the
+sample and re-reading the 7 buckets of every vehicle pro rata). No visible
 frame-rate change. The income collector adds about 0.2 ms per batch of paid
 items (~7 batches per second of game time on that save). Open windows read
 one small summary and one income ring per shown vehicle every 2 s; a

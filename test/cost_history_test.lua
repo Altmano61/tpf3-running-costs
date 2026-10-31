@@ -25,6 +25,20 @@ local h = M.new(0)
 M.add(h, 2000, 2000, "driving", 1461000, 0, 1.0, Y)    -- 2 s at 1 461 000/yr = 2000 cost
 local w = W(h, 2000, Y)
 near("cost of 2 s driving", w.c.driving, 2000, 1e-6)
+-- state diet (0.3.1): a bucket is one packed string (the game copies the
+-- state per element, ~0.1-0.3 us each; a string counts as one)
+check("head bucket is a table of flat fields", type(h.b[1]) == "table" and h.b[1].t == nil and h.b[1].t_driving == 2 and h.b[1].t0 == 0)
+local rt = M.decode(M.encode({ t0 = 243500, n = 180.5, r = 123456.789, s = 0.1, t_driving = 100, [28] = 4, [29] = 1234.5 }))
+check("encode/decode roundtrip", rt.t0 == 243500 and rt.n == 180.5 and rt.r == 123456.789 and rt.s == 0.1 and rt.t_driving == 100 and rt[28] == 4 and rt[29] == 1234.5)
+check("decode of garbage", type(M.decode("")) == "table" and type(M.decode("x")) == "table" and M.decode(nil) == nil)
+check("decode passes a legacy table bucket through", M.decode(rt) == rt)
+near("window with an explicit key list", M.window(h, 2000, Y, F, Y, { "driving", "terminal" }).c.driving, 2000, 1e-6)
+check("explicit key list ignores unknown fields", M.window(h, 2000, Y, F, Y, { "terminal" }).total == 0)
+local flat = M.deflateSummary(w)
+check("flat summary has no sub-tables", flat.t == nil and flat.c == nil and flat.t_driving == 2 and flat.c_driving == 2000 and flat.cov == w.cov)
+local back = M.inflateSummary(flat)
+check("inflated summary", back.t.driving == 2 and back.c.driving == 2000 and back.cov == w.cov and back.total == w.total)
+check("inflate tolerates a plain summary", M.inflateSummary(w).t.driving == 2)
 near("seconds", w.t.driving, 2, 1e-9)
 near("coverage of a young history", w.cov, 2000, 1e-9)
 M.add(h, 4000, 2000, "terminal", 1461000, 292200, 0.4, Y) -- 20 % surcharge at factor 0.4
@@ -38,8 +52,14 @@ local h2 = M.new(0)
 M.add(h2, 1000, 1000, "driving", 1000 * Y / 1000, 0, 1.0, Y)              -- 1 s at 1000/s -> 1000
 M.add(h2, M.BUCKET_MS + 1000, 1000, "driving", 2000 * Y / 1000, 0, 1.0, Y) -- 1 s at 2000/s -> 2000
 near("static change", W(h2, M.BUCKET_MS + 1000, Y).c.driving, 3000, 1e-6)
-check("two buckets open, each with its rate", h2.b[1] ~= nil and h2.b[2] ~= nil and h2.b[2].t0 == M.BUCKET_MS and h2.b[1].r == Y and h2.b[2].r == 2 * Y)
-check("bucket holds no per-class cost table", h2.b[1].c == nil)
+check("two buckets open, each with its rate", h2.b[1] ~= nil and h2.b[2] ~= nil and M.decode(h2.b[2]).t0 == M.BUCKET_MS and M.decode(h2.b[1]).r == Y and M.decode(h2.b[2]).r == 2 * Y)
+check("closed bucket packed, head a table", type(h2.b[1]) == "string" and type(h2.b[2]) == "table", type(h2.b[1]) .. "/" .. type(h2.b[2]))
+check("t0 leads the string", h2.b[1]:sub(1, 3) == "t0=")
+check("bucket holds no per-class cost table", M.decode(h2.b[1]).c == nil)
+-- a ring whose head is still packed (older state) is unpacked on the next add
+local hp = M.new(0); M.add(hp, 1000, 1000, "driving", Y, 0, 1.0, Y); hp.b[1] = M.encode(hp.b[1])
+M.add(hp, 2000, 1000, "driving", Y, 0, 1.0, Y)
+check("packed head unpacked and continued", type(hp.b[1]) == "table" and hp.b[1].t_driving == 2)
 
 -- static changes inside one bucket: the bucket's rate is the seconds-weighted
 -- mean, so the pre-change seconds keep their old rate in the total
@@ -75,9 +95,9 @@ near("short window", w3s.c.driving, 3 * 1000 - 1000 * 10 / M.BUCKET_MS, 1e-3)
 
 -- unknown keys and sparse buckets tolerated
 local h4 = M.new(0); M.add(h4, 500, 500, "speed_bucket_90", Y, 0, 1.0, Y)
-h4.b[h4.head].r = nil
+local b4 = M.decode(h4.b[h4.head]); b4.r = nil; h4.b[h4.head] = M.encode(b4)
 check("unknown key, missing rate", W(h4, 500, Y).t.speed_bucket_90 == 0.5 and W(h4, 500, Y).total == 0)
-h4.b[h4.head].t = nil; h4.b[h4.head].s = nil
+b4.t_speed_bucket_90 = nil; b4.s = nil; h4.b[h4.head] = M.encode(b4)
 check("missing t and s", W(h4, 500, Y).total == 0 and next(W(h4, 500, Y).t) == nil)
 
 -- time jump backwards (before the history's first bucket) resets
@@ -113,7 +133,7 @@ M.add(h6, 10, 10, "driving", Y, 0, 1.0, Y)
 M.add(h6, 5 * M.BUCKET_MS, 3 * M.BUCKET_MS, "driving", Y, 0, 1.0, Y)
 local n6 = 0
 for __ in pairs(h6.b) do n6 = n6 + 1 end
-check("gap: buckets in between are not created", n6 == 2 and h6.b[2].t0 == 5 * M.BUCKET_MS, tostring(n6))
+check("gap: buckets in between are not created", n6 == 2 and M.decode(h6.b[2]).t0 == 5 * M.BUCKET_MS, tostring(n6))
 
 -- shared ring: income without time accumulation
 local r = M.newRing(0)
@@ -151,9 +171,10 @@ local I4 = M.windowIncome(r4, 2000, Y, nil)
 check("counts added", I4[7].n == 3 and I4[7].base == 300 and I4[7].ok == 2 and I4[7].q == 3)
 M.addIncomeCounts(r4, M.BUCKET_MS + 500, 7, 1, 100, 1, 1)    -- bucket 1 opens
 M.addIncomeCounts(r4, M.BUCKET_MS - 500, 7, 1, 50, 0, 1)     -- late item of bucket 0
-check("late item lands in its own bucket", r4.b[1].inc[7].n == 4 and r4.b[2].inc[7].n == 1 and r4.head == 2)
+check("late item lands in its own bucket", M.decode(r4.b[1])[28] == 4 and M.decode(r4.b[2])[28] == 1 and r4.head == 2)   -- [cargo 7 × 4 + 0] = n
+check("late item's bucket stays packed", type(r4.b[1]) == "string" and type(r4.b[2]) == "table")
 M.addIncomeCounts(r4, -5000, 7, 1, 10, 0, 0)                 -- older than the ring start: head bucket, no reset
-check("too-old item goes to the newest bucket, ring kept", r4.head == 2 and r4.b[2].inc[7].n == 2 and r4.b[1].inc[7].n == 4)
+check("too-old item goes to the newest bucket, ring kept", r4.head == 2 and M.decode(r4.b[2])[28] == 2 and M.decode(r4.b[1])[28] == 4)
 
 -- income before the cost history's first sample must not count (review 0.2.0 #1)
 near("weight: bucket entirely before first is 0", M.bucketWeight(0, 3 * M.BUCKET_MS, 6 * M.BUCKET_MS, 2 * M.BUCKET_MS), 0, 1e-9)
@@ -234,6 +255,18 @@ near("sparse ring: capped at the window", select(2, M.windowPool(pr4, 2 * Y, Y))
 check("prune removes expired entries", M.prunePool(pr2, 40000, 10000) == 1 and next(pr2.v) == nil)
 check("prune keeps live entries", M.prunePool(pr4, 601000, Y) == 0 and pr4.v[7] ~= nil)
 check("empty pool ring", next((M.windowPool(M.newPool(0), 0, Y))) == nil and select(2, M.windowPool(nil, 0, Y)) == 0)
+
+-- income buckets: one packed string per bucket with integer keys (cargo × 4 + field)
+local ir = M.newRing(0)
+M.addIncome(ir, 1000, 3, 100, true)
+M.addIncomeCounts(ir, 1000, 3, 2, 200, 1, 2)
+M.addIncomeCounts(ir, 1000, 5, 1, 50, 0, 0)
+check("income head bucket is a table with integer keys", type(ir.b[ir.head]) == "table" and ir.b[ir.head][12] == 3)
+-- a legacy table bucket (older state) is still read
+local lr = M.newRing(0); lr.head = 1; lr.b[1] = { t0 = 0, [12] = 2, [13] = 20 }
+check("legacy table bucket read", M.windowIncome(lr, 1000, Y, nil)[3].n == 2)
+local wi = M.windowIncome(ir, 1000, Y, nil)
+check("income decoded per cargo", wi[3].n == 3 and wi[3].base == 300 and wi[3].ok == 2 and wi[3].q == 3 and wi[5].n == 1 and wi[5].base == 50)
 
 if failures > 0 then
 	print(failures .. " failure(s)")
