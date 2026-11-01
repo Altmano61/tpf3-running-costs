@@ -1,7 +1,8 @@
 -- Cost classes of Running Cost Breakdown: the states the game charges a
 -- vehicle's running costs in, with the factor it applies (measured
 -- 2026-10-20, see docs/superpowers/specs/2026-10-20-running-cost-breakdown-design.md):
--- driving, waiting en route and holding (0.4.0) 100 %, at a terminal 40 %, in a depot 5 %.
+-- driving, waiting en route, waiting before a station and holding (0.4.0) 100 %,
+-- at a terminal 40 %, in a depot 5 %.
 --
 -- The list is the single source for the sampler (what to accumulate) and the
 -- GUI (which rows to show, in which order, in which colour). Later versions
@@ -16,6 +17,9 @@ local M = {}
 M.CLASSES = {
 	{ key = "driving", factor = 1.0, labelKey = "running_costs_class_driving", shortKey = "running_costs_short_driving", colour = "default" },
 	{ key = "waiting", factor = 1.0, labelKey = "running_costs_class_waiting", shortKey = "running_costs_short_waiting", colour = "warn" },
+	-- 0.4.0: standing in the approach of a station (queue before an occupied
+	-- terminal / platform; MOVE_PATH.dyn.approachingStation, docs/probes/station_probe)
+	{ key = "station", factor = 1.0, labelKey = "running_costs_class_station", shortKey = "running_costs_short_station", colour = "warn" },
 	-- 0.4.0: aircraft circling for a runway or hovering in the landing queue,
 	-- ships waiting for a berth (holding.lua decides; charged in full too)
 	{ key = "holding", factor = 1.0, labelKey = "running_costs_class_holding", shortKey = "running_costs_short_holding", colour = "warn" },
@@ -34,13 +38,17 @@ M.STANDING_SPEED = 0.5   -- m/s; below this an EN_ROUTE vehicle counts as waitin
 
 -- stateName: "IN_DEPOT" | "EN_ROUTE" | "AT_TERMINAL" | "GOING_TO_DEPOT"
 -- (the TransportVehicleState enum name), speedMps may be nil, holding = true
--- when holding.step() says so (0.4.0) -> class key
-function M.classify(stateName, speedMps, standingSpeed, holding)
+-- when holding.step() says so, atStation = true when the vehicle is in the
+-- approach of a station (both 0.4.0) -> class key
+function M.classify(stateName, speedMps, standingSpeed, holding, atStation)
 	if stateName == "IN_DEPOT" then return "depot" end
 	if stateName == "AT_TERMINAL" then return "terminal" end
 	if stateName == "EN_ROUTE" or stateName == "GOING_TO_DEPOT" then
 		if holding == true then return "holding" end
-		if (speedMps or 0) < (standingSpeed or M.STANDING_SPEED) then return "waiting" end
+		if (speedMps or 0) < (standingSpeed or M.STANDING_SPEED) then
+			if atStation == true then return "station" end
+			return "waiting"
+		end
 	end
 	return "driving"   -- moving, or a state this version does not know (charged in full)
 end

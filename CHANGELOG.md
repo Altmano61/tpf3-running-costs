@@ -7,6 +7,10 @@
   state falling back (Landing/Approach → Flight), hovering below 5 m/s in flight, or ships below 1 m/s in
   the harbour approach zone; charged at 100 % like driving. The row label counts the aborted approaches
   in the window ("holding pattern (3 go-arounds)"); the live line shows "holding".
+- New cost class "waiting at station" for road, tram and rail vehicles standing in the approach of a
+  station because no terminal or platform is free (the lorry queue before a loading bay); standing at
+  signals or in traffic stays "waiting en route". Detected from `MOVE_PATH.dyn.approachingStation`
+  (measured in `docs/probes/station_probe/`, one 1-3 µs read per standing vehicle).
 - `holding.lua` (pure, luajit-tested) holds the rules; the sampler reads `MOVE_PATH_AIRCRAFT` /
   `AIRCRAFT` only for aircraft and ships en route (carrier cached per vehicle); state tables `statC`,
   `airF`, `airH`, `airS`, bucket field `g`; STATE_VERSION unchanged.

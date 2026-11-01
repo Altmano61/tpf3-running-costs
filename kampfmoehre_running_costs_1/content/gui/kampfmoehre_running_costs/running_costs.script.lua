@@ -449,9 +449,11 @@ function data()
 		end
 		return fmt(r.labelKey, { factor = tostring(round(r.factor * 100)) })
 	end
+	local CLASS_TOOLTIPS = { holding = "running_costs_class_holding_tooltip", station = "running_costs_class_station_tooltip" }
 	local function classCell(r, cell)
-		if r.key == "holding" then
-			return builtin.TextView{ meta = { class = "font-scale-body", tooltip = _("running_costs_class_holding_tooltip") }, text = classLabel(r) }
+		local tooltipKey = CLASS_TOOLTIPS[r.key]
+		if tooltipKey then
+			return builtin.TextView{ meta = { class = "font-scale-body", tooltip = _(tooltipKey) }, text = classLabel(r) }
 		end
 		return cell(classLabel(r))
 	end
@@ -610,7 +612,11 @@ function data()
 		local okR, rc = pcall(api.engine.util.vehicle.getRunningCost, v)
 		local okS, speed = pcall(api.engine.util.vehicle.getSpeed, v)
 		local key = classes.classify(stateName(tv.state), (okS and speed) or 0)
-		if key == "driving" then
+		if key == "waiting" then
+			-- standing in the approach of a station (0.4.0): one cheap component read
+			local okM, mp = pcall(api.engine.getComponent, v, api.type.ComponentType.MOVE_PATH)
+			if okM and mp and mp.dyn and mp.dyn.approachingStation == true then key = "station" end
+		elseif key == "driving" then
 			-- holding (0.4.0) is decided by the sampler (episode memory); its
 			-- summary is at most one sample old
 			local gs = gsComponent()

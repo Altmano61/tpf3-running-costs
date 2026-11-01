@@ -79,3 +79,15 @@ the 0.5 m/s standing threshold.
 Test save (`mods-test`): Flugzeug 2 shows several go-arounds and a holding share; helicopters show holding
 while queued; ships show holding in the queue and "waiting en route" only when standing elsewhere; the big
 save shows no holding rows for road and rail vehicles and no perf change.
+
+## Addendum (2026-11-01): waiting in front of a station
+
+Same release. Road, tram and rail vehicles standing en route (below the 0.5 m/s standing threshold) are
+split into "waiting en route" (signals, traffic, a station exit) and "waiting at station" (the queue
+before an occupied terminal or platform) by `MOVE_PATH.dyn.approachingStation`, measured on the big save
+(`docs/probes/station_probe/README.md`: 915 of 1 150 standing rows with the flag are within 2 edges of the
+stop, rows without it spread over the section; the read costs 1-3 µs). Sixth class `station` (factor 1.0,
+orange, label "waiting at station" / "Warten vor Station", tooltip), inserted between waiting and holding;
+`classify(stateName, speed, standingSpeed, holding, atStation)`; the sampler reads `MOVE_PATH` only for
+standing non-air, non-water vehicles; the GUI live line reads it itself when its own classification says
+"waiting". No memory, no state change, STATE_VERSION unchanged.

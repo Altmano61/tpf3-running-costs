@@ -146,6 +146,14 @@ function data()
 		return r
 	end
 
+	-- standing in the approach of a station (0.4.0): the queue before an
+	-- occupied terminal or platform. MOVE_PATH.dyn.approachingStation is clean
+	-- for standing vehicles and the read costs 1-3 us (docs/probes/station_probe)
+	local function atStation(v)
+		local okM, mp = pcall(api.engine.getComponent, v, api.type.ComponentType.MOVE_PATH)
+		return okM and mp ~= nil and mp.dyn ~= nil and mp.dyn.approachingStation == true
+	end
+
 	-- holding detection (0.4.0): the extra component reads only for aircraft
 	-- (carrier 1) and ships (2) that are en route; one observation per sample
 	-- for holding.step()
@@ -275,7 +283,12 @@ function data()
 			elseif cc == 1 and s.airH[v] == 1 then
 				s.airH[v], s.airS[v] = 0, nil   -- parked or at the terminal: the episode is over
 			end
-			local key = classes.classify(name, speed, nil, hold)
+			-- road, tram and rail standing en route: before a station or in traffic?
+			local station = false
+			if moving and not hold and cc ~= 1 and cc ~= 2 and speed < classes.STANDING_SPEED then
+				station = atStation(v)
+			end
+			local key = classes.classify(name, speed, nil, hold, station)
 			if static <= 0 then static = rc end   -- unknown parts: no surcharge, cost at rc
 			local h = s.v[v]
 			if h == nil then

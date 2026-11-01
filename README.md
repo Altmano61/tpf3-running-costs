@@ -101,7 +101,7 @@ fine, and that are covered elsewhere too, costs money without benefit and
 can be moved or removed; a building whose rows start at low conditions earns
 its keep. The mod changes nothing about the pool.
 
-## Holding pattern (0.4.0)
+## Holding pattern and station queue (0.4.0)
 
 Aircraft that go around because the runway is occupied, helicopters hovering in the
 landing queue and ships waiting for a free berth move too fast for the "waiting en
@@ -121,6 +121,14 @@ half its cruise altitude), taxis, or starts a new leg. Helicopters queue by hove
 in state Flight below 5 m/s. Ships queue in the harbour approach zone below 1 m/s.
 The live line of the vehicle window shows "holding" as soon as the sampler has
 classified the vehicle so (at most one sample behind).
+
+Road, tram and rail vehicles get "waiting at station" for the time they stand in
+the approach of a station because no terminal or platform is free (the queue of
+lorries before a loading bay, trains before an occupied platform); standing
+elsewhere stays "waiting en route". The engine marks the approach zone in the
+vehicle's path (`MOVE_PATH.dyn.approachingStation`); for standing vehicles the
+flag is clean and the read costs microseconds
+(`docs/probes/station_probe/README.md`).
 
 ## Installation
 
