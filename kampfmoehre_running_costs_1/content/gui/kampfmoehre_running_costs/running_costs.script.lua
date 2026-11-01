@@ -881,8 +881,8 @@ function data()
 	local function feeLines(T)
 		if T.empty then return _("running_costs_fee_none"), nil end
 		local fee = money(T.fee)
-		if T.goodShare == nil then return fmt("running_costs_fee_line_raw", { fee = fee }), nil end
-		local first = fmt("running_costs_fee_line", { fee = fee, pct = tostring(round(T.goodShare * 100)) })
+		if T.fullShare == nil then return fmt("running_costs_fee_line_raw", { fee = fee }), nil end
+		local first = fmt("running_costs_fee_line", { fee = fee, pct = tostring(round(T.fullShare * 100)) })
 		if T.elsewhereShare == nil then return first, nil end
 		return first, fmt("running_costs_fee_elsewhere_line", { elsewhere = tostring(round(T.elsewhereShare * 100)) })
 	end
@@ -988,7 +988,7 @@ function data()
 			line = line,
 			second = second or false,
 			tooltip = fmt("running_costs_fee_tooltip", {
-				full = tostring(T.fullShare and round(T.fullShare * 100) or 0),
+				good = tostring(T.goodShare and round(T.goodShare * 100) or 0),
 				year = T.year and money(T.year) or "–",
 			}),
 		}

@@ -19,14 +19,14 @@ end
 -- gone: set of entities that no longer exist (sold vehicles keep their fee
 -- in the sum and the shares but get no row; demolished buildings are not
 -- "elsewhere") ->
--- { fee, goodShare | nil, fullShare | nil, elsewhereShare | nil,
+-- { fee, goodShare | nil, fullShare | nil, elsewhereShare | nil, (0.4.0: share of the fee charged at exactly 100 % that went to vehicles another building also maintained)
 --   rows = { { v, seconds, fee, c0, c1, elsewhere = { other buildings } } },
 --   sold = hidden rows, soldFee = their fee, empty }
 function M.build(entries, building, maintainedBy, gone)
 	local out = { fee = 0, goodShare = nil, fullShare = nil, elsewhereShare = nil, rows = {}, sold = 0, soldFee = 0, empty = true }
 	if type(entries) ~= "table" then return out end
 	gone = gone or {}
-	local goodFee, fullFee, elsewhereGoodFee = 0, 0, 0
+	local goodFee, fullFee, elsewhereFullFee = 0, 0, 0
 	local n = 0
 	for v, e in pairs(entries) do
 		if type(e) == "table" then
@@ -49,10 +49,10 @@ function M.build(entries, building, maintainedBy, gone)
 			end
 			out.fee = out.fee + fee
 			if fee > 0 then
-				local g = e.gfee or 0
-				goodFee = goodFee + g
-				fullFee = fullFee + (e.ffee or 0)
-				if #elsewhere > 0 then elsewhereGoodFee = elsewhereGoodFee + g end
+				local f = e.ffee or 0
+				goodFee = goodFee + (e.gfee or 0)
+				fullFee = fullFee + f
+				if #elsewhere > 0 then elsewhereFullFee = elsewhereFullFee + f end
 			end
 		end
 	end
@@ -64,7 +64,7 @@ function M.build(entries, building, maintainedBy, gone)
 	if out.fee > 0 then
 		out.goodShare = goodFee / out.fee
 		out.fullShare = fullFee / out.fee
-		if goodFee > 0 then out.elsewhereShare = elsewhereGoodFee / goodFee end
+		if fullFee > 0 then out.elsewhereShare = elsewhereFullFee / fullFee end
 	end
 	return out
 end

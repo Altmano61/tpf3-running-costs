@@ -16,7 +16,7 @@ local function near(name, got, want, tol)
 end
 
 local E = {
-	[7] = { s = 600, fee = 6000, gfee = 3000, ffee = 0, c0 = 0.5, c1 = 0.9 },  -- half the fee while good
+	[7] = { s = 600, fee = 6000, gfee = 3000, ffee = 1500, c0 = 0.5, c1 = 0.9 },  -- half the fee while good, a quarter at 100 %
 	[8] = { s = 300, fee = 3000, gfee = 3000, ffee = 3000, c0 = 1.0 },        -- always full
 	[9] = { s = 100, fee = 0, gfee = 0, ffee = 0, c0 = nil },                 -- zero fee vehicle
 }
@@ -24,8 +24,10 @@ local MB = { [7] = { [1] = 1, [2] = 1 }, [8] = { [1] = 1 }, [9] = { [1] = 1 } }
 local T = M.build(E, 1, MB)
 near("fee", T.fee, 9000, 1e-9)
 near("good share (fee-weighted)", T.goodShare, (6000 * 0.5 + 3000 * 1.0) / 9000, 1e-9)
-near("full share", T.fullShare, 3000 / 9000, 1e-9)
-near("elsewhere share of the good part", T.elsewhereShare, (6000 * 0.5) / (6000 * 0.5 + 3000 * 1.0), 1e-9)
+near("full share", T.fullShare, (1500 + 3000) / 9000, 1e-9)
+-- 0.4.0: the headline is the share at exactly 100 %, "elsewhere" is a share of that part
+near("elsewhere share of the 100 % part", T.elsewhereShare, 1500 / (1500 + 3000), 1e-9)
+check("no fee at 100 %: no elsewhere share", M.build({ [7] = { s = 2, fee = 300, gfee = 100, ffee = 0, c0 = 0.5 } }, 1, MB).elsewhereShare == nil)
 check("rows sorted by fee, zero-fee vehicle last", #T.rows == 3 and T.rows[1].v == 7 and T.rows[3].v == 9)
 check("row fields", T.rows[1].seconds == 600 and T.rows[1].fee == 6000 and T.rows[1].c0 == 0.5 and T.rows[1].c1 == 0.9)
 check("elsewhere from maintainedBy", #T.rows[1].elsewhere == 1 and T.rows[1].elsewhere[1] == 2 and #T.rows[2].elsewhere == 0)

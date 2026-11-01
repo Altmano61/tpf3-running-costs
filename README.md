@@ -84,12 +84,13 @@ catchment area.
 
 The window of a depot or maintenance building therefore gets a card
 "Maintenance fee of the last N min of game time", collapsed:
-`€X · 87 % for vehicles already very good` and `40 % of that also covered
-elsewhere`. "Very good" is the game's own band (condition 0.8 and better);
-the share is taken from the fee charged while the vehicle was in that band,
-so the higher rate of a poor vehicle counts as poor. The tooltip adds the
-share for vehicles at exactly 100 % and the amount the game booked on the
-building in the last default year. Expanded, one row per vehicle that was
+`€X · 87 % for vehicles already at 100 %` and `40 % of that also covered
+elsewhere`. The share is taken from the fee charged while the vehicle was at
+exactly 100 % (nothing left to repair), so the higher rate of a poor vehicle
+counts as poor. Until 0.3.1 the headline used the game's "very good" band
+(0.8 and better), which on a well-covered network reads 100 % almost
+everywhere; that share now sits in the tooltip, together with the amount the
+game booked on the building in the last default year. Expanded, one row per vehicle that was
 in the pool during the window: minutes in the pool, its fee share,
 condition at entry and when last seen in the pool ("73 → 100"; a vehicle that
 left wears down again, so "now" would blame the building), and how

@@ -11,6 +11,10 @@
   station because no terminal or platform is free (the lorry queue before a loading bay); standing at
   signals or in traffic stays "waiting en route". Detected from `MOVE_PATH.dyn.approachingStation`
   (measured in `docs/probes/station_probe/`, one 1-3 µs read per standing vehicle).
+- The maintenance-fee card's headline share is now the fee charged for vehicles at exactly 100 %
+  condition (nothing left to repair); the game's "very good" band (80 % and better) read 100 % on almost
+  every building of a well-covered network and moved to the tooltip. "Also covered elsewhere" is a share
+  of the 100 % part.
 - `holding.lua` (pure, luajit-tested) holds the rules; the sampler reads `MOVE_PATH_AIRCRAFT` /
   `AIRCRAFT` only for aircraft and ships en route (carrier cached per vehicle); state tables `statC`,
   `airF`, `airH`, `airS`, bucket field `g`; STATE_VERSION unchanged.
