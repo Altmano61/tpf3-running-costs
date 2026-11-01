@@ -18,6 +18,9 @@
 --     inc = { [vehicle or "L<line>"] = Ring with bucket.inc } (income records consumed
 --           from income.script.lua's queue state), incSeen = { [recordId] = t },
 --     statR = { [vehicle] = static rate per year }, statT = { [vehicle] = ms of the last check },
+--     statC = { [vehicle] = carrier: 1 air, 2 water, 0 other } (0.4.0, read with the static rate),
+--     airF / airH / airA / airS = { [aircraft] = last flight state / 1 while holding / 1 while a drop may be
+--           counted / stop index while holding } (holding.lua memory),
 --     pool = { [building] = Pool (cost_history.newPool: one sliding-span entry per vehicle) },
 --     mb = { ["<vehicle>:<building>"] = last seen ms } (one flat table), poolInfo = { buildings, entries }, poolStored,
 --     perf = { lastMs, n, get, cls, lua, set, setN = sums since the last perf line } }
@@ -28,7 +31,7 @@
 -- A version mismatch rebuilds the state from scratch.
 
 function data()
-	local VERSION = "0.3.1"
+	local VERSION = "0.4.0"
 	local STATE_VERSION = 7       -- 2: histories carry `first`; 3: income rings `inc` (0.2.0); 5: pools + maintainedBy (0.3.0); 6/7: flat summaries, buckets packed into strings (0.3.1)
 	local MAX_FAILS = 10          -- consecutive failed steps before the state is rebuilt
 	local SAMPLE_MS = 3000       -- game time between samples (8.5 ms per sample at 364 vehicles: state get 2.8, classify 2.8, set 2.9)
@@ -40,6 +43,7 @@ function data()
 
 	local classes = ug_require "kampfmoehre_running_costs_1::/running_costs/cost_classes.lua"
 	local history = ug_require "kampfmoehre_running_costs_1::/running_costs/cost_history.lua"
+	local holding = ug_require "kampfmoehre_running_costs_1::/running_costs/holding.lua"
 
 	local gameLog = log   -- the game's global log table, before the local below shadows it
 	local function log(text)
@@ -95,6 +99,21 @@ function data()
 		return sum
 	end
 
+	-- Carrier enum value -> 1 air, 2 water, 0 other (compared as strings: the
+	-- enum values are not iterable, see docs/probes/holding_probe)
+	local carrierAir, carrierWater = nil, nil
+	pcall(function()
+		local C = api.type["enum"].Carrier
+		carrierAir, carrierWater = tostring(C.AIR), tostring(C.WATER)
+	end)
+	local function carrierCode(carrier)
+		if carrier == nil then return 0 end
+		local c = tostring(carrier)
+		if c == carrierAir then return 1 end
+		if c == carrierWater then return 2 end
+		return 0
+	end
+
 	-- consist static rate per vehicle, kept in the state: { r = per year, t = last check }
 	local STATIC_RECHECK_MS = 60000
 	local MAX_PENALTY_FACTOR = 1.3
@@ -111,7 +130,50 @@ function data()
 		local tv = api.engine.getComponent(v, api.type.ComponentType.TRANSPORT_VEHICLE)
 		r = tv and staticPerYear(tv) or 0
 		s.statR[v], s.statT[v] = r, now
+		s.statC = s.statC or {}
+		local cc = tv and carrierCode(tv.carrier) or 0
+		if tv and tv.carrier == nil then
+			-- no carrier field in this build: the components tell (probe fallback)
+			local okA, ac = pcall(api.engine.getComponent, v, api.type.ComponentType.AIRCRAFT)
+			if okA and ac then
+				cc = 1
+			else
+				local okM, mpa = pcall(api.engine.getComponent, v, api.type.ComponentType.MOVE_PATH_AIRCRAFT)
+				if okM and mpa and mpa.shipState then cc = 2 end
+			end
+		end
+		s.statC[v] = cc
 		return r
+	end
+
+	-- holding detection (0.4.0): the extra component reads only for aircraft
+	-- (carrier 1) and ships (2) that are en route; one observation per sample
+	-- for holding.step()
+	local function observe(v, cc, speed, withStop)
+		local okM, mpa = pcall(api.engine.getComponent, v, api.type.ComponentType.MOVE_PATH_AIRCRAFT)
+		if not okM then mpa = nil end
+		if cc == 2 then
+			local st = mpa and mpa.shipState or nil
+			local dyn = st and st.dyn or nil
+			return { carrier = "WATER", enRoute = true, speed = speed, approaching = dyn and dyn.approachingStation == true or false }
+		end
+		local st = mpa and mpa.aircraftState or nil
+		local okA, ac = pcall(api.engine.getComponent, v, api.type.ComponentType.AIRCRAFT)
+		if not okA then ac = nil end
+		-- the stop index (a new leg ends an episode) costs a TRANSPORT_VEHICLE
+		-- copy, so it is read only while an episode runs
+		local okT, tv = false, nil
+		if withStop then okT, tv = pcall(api.engine.getComponent, v, api.type.ComponentType.TRANSPORT_VEHICLE) end
+		local f = st and st.flightState or nil
+		if type(f) ~= "number" then f = tonumber(tostring(f)) end
+		return {
+			carrier = "AIR", enRoute = true, speed = speed,
+			flight = f,
+			landRes = ac and ac.reservedLandingRunway == true or false,
+			alt = st and st.dyn and st.dyn.alt or nil,
+			cruise = st and st.cruiseAlt or nil,
+			stop = (okT and tv) and tv.stopIndex or nil,
+		}
 	end
 
 	-- class keys for cost_history.window (fast path, no field scan)
@@ -176,20 +238,44 @@ function data()
 				for __, v in ipairs(list) do lineOf[v] = line end
 			end
 		end
+		-- tables added in 0.4.0 (states of 0.3.1 lack them; same STATE_VERSION)
+		s.statC = s.statC or {}
+		s.airF = s.airF or {}
+		s.airH = s.airH or {}
+		s.airS = s.airS or {}
+		s.airA = s.airA or {}
 		local count = 0
+		local nAir, nWater = 0, 0   -- perf line: how many vehicles get the holding reads
 		local rcOf = {}   -- running cost per vehicle, reused by the pool sampler
 		local luaClock = api.type.Clock.new()
 		luaMs = 0
 		for v, name in pairs(stateOf) do
 			count = count + 1
 			local speed = 0
-			if name == "EN_ROUTE" or name == "GOING_TO_DEPOT" then
+			local moving = name == "EN_ROUTE" or name == "GOING_TO_DEPOT"
+			if moving then
 				speed = api.engine.util.vehicle.getSpeed(v) or 0
 			end
-			local key = classes.classify(name, speed)
 			local rc = api.engine.util.vehicle.getRunningCost(v) or 0
 			rcOf[v] = rc
 			local static = staticOf(s, v, now, rc)
+			-- holding (0.4.0): aircraft and ships only
+			local hold, goAround = false, false
+			local cc = s.statC[v]
+			if cc == 1 then nAir = nAir + 1 elseif cc == 2 then nWater = nWater + 1 end
+			if moving and (cc == 1 or cc == 2) then
+				local prev = nil
+				if cc == 1 then prev = { f = s.airF[v], h = s.airH[v] or 0, a = s.airA[v], stop = s.airS[v] } end
+				local nxt
+				nxt, hold, goAround = holding.step(prev, observe(v, cc, speed, prev ~= nil and prev.h == 1))
+				if nxt then
+					s.airF[v], s.airH[v], s.airA[v] = nxt.f, nxt.h, nxt.a
+					s.airS[v] = nxt.h == 1 and nxt.stop or nil
+				end
+			elseif cc == 1 and s.airH[v] == 1 then
+				s.airH[v], s.airS[v] = 0, nil   -- parked or at the terminal: the episode is over
+			end
+			local key = classes.classify(name, speed, nil, hold)
 			if static <= 0 then static = rc end   -- unknown parts: no surcharge, cost at rc
 			local h = s.v[v]
 			if h == nil then
@@ -198,6 +284,7 @@ function data()
 			end
 			local tLua = luaClock:getTime()
 			history.add(h, now, dtMs, key, static, math.max(0, rc - static), classes.factor(key), yearMs)
+			if goAround then history.addCount(h, now, "g", 1) end
 			local w = history.window(h, now, yearMs, classes.factor, yearMs, CLASS_KEYS)
 			luaMs = luaMs + (luaClock:getTime() - tLua) / 1000
 			w.line = lineOf[v] or -1
@@ -214,6 +301,7 @@ function data()
 				s.summary[v] = nil
 				if s.statR then s.statR[v] = nil end
 				if s.statT then s.statT[v] = nil end
+				s.statC[v], s.airF[v], s.airH[v], s.airA[v], s.airS[v] = nil, nil, nil, nil, nil
 				if s.inc then s.inc[v] = nil end
 				gone = gone or {}
 				gone[tostring(v) .. ":"] = true
@@ -226,7 +314,7 @@ function data()
 			end
 		end
 		local buildings, entries = samplePools(s, now, dtMs, rcOf, yearMs)
-		s.poolInfo = { buildings = buildings, entries = entries }
+		s.poolInfo = { buildings = buildings, entries = entries, air = nAir, water = nWater }
 		-- every ~60 s: income rings of lines and pool rings of buildings that no
 		-- longer exist, maintainedBy entries older than the window
 		if (s.sweep or 0) + SWEEP_MS <= now then
@@ -274,7 +362,7 @@ function data()
 	end
 	local function stateSizes(s)
 		local parts = {}
-		for __, k in ipairs({ "v", "summary", "inc", "incSeen", "pool", "mb", "statR", "statT" }) do
+		for __, k in ipairs({ "v", "summary", "inc", "incSeen", "pool", "mb", "statR", "statT", "statC", "airF", "airH", "airA", "airS" }) do
 			if type(s[k]) == "table" then
 				local t, n = sizeOf(s[k])
 				parts[#parts + 1] = string.format("%s %d/%d", k, t, n)
@@ -294,7 +382,8 @@ function data()
 		if type(s) ~= "table" or s.version ~= STATE_VERSION or type(s.tSample) ~= "number" or s.tSample > now
 			or type(s.v) ~= "table" or type(s.summary) ~= "table" or type(s.pool) ~= "table" then
 			s = { version = STATE_VERSION, tSample = now, tPerfLog = now, fails = 0,
-				v = {}, summary = {}, inc = {}, pool = {}, mb = {}, statR = {}, statT = {}, perf = { lastMs = 0, maxMs = 0 } }
+				v = {}, summary = {}, inc = {}, pool = {}, mb = {}, statR = {}, statT = {}, statC = {}, airF = {}, airH = {}, airA = {}, airS = {},
+				perf = { lastMs = 0, maxMs = 0 } }
 			state:set(s)
 			log("v" .. VERSION .. " sampler started (fresh state) at gameTime=" .. now)
 			return
@@ -347,8 +436,8 @@ function data()
 			local n, setN = math.max(1, perf.n or 1), math.max(1, perf.setN or 1)
 			local meanGet, meanCls, meanSet = perf.get / n, perf.cls / n, perf.set / setN
 			local pi = s.poolInfo or {}
-			log(string.format("perf: mean of %d samples %.2f ms (state get %.2f, classify %.2f of which history %.2f, state set %.2f), last %.2f ms, %d vehicles, %d buildings, %d pool entries (%d stored), %d income records consumed since the last line; %s",
-				n, meanGet + meanCls + meanSet, meanGet, meanCls, (perf.lua or 0) / n, meanSet, ms, count, pi.buildings or 0, pi.entries or 0, s.poolStored or 0, s.incItems or 0, stateSizes(s)))
+			log(string.format("perf: mean of %d samples %.2f ms (state get %.2f, classify %.2f of which history %.2f, state set %.2f), last %.2f ms, %d vehicles (%d aircraft, %d ships), %d buildings, %d pool entries (%d stored), %d income records consumed since the last line; %s",
+				n, meanGet + meanCls + meanSet, meanGet, meanCls, (perf.lua or 0) / n, meanSet, ms, count, pi.air or 0, pi.water or 0, pi.buildings or 0, pi.entries or 0, s.poolStored or 0, s.incItems or 0, stateSizes(s)))
 			perf.lastMs, perf.n, perf.get, perf.cls, perf.lua, perf.set, perf.setN = ms, 0, 0, 0, 0, 0, 0
 			s.incItems = 0
 			state:set(s)   -- the reset sums and counters (a second copy, once per PERF_LOG_MS)

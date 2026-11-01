@@ -194,12 +194,19 @@ function M.add(h, nowMs, dtMs, key, costPerYearStatic, surchargePerYear, factor,
 	b.s = (b.s or 0) + (surchargePerYear or 0) * dtMs / yearMs * factor
 end
 
+-- n more of a plain counted event in the bucket for nowMs (0.4.0: field "g",
+-- aborted approaches); window() sums it pro rata like the seconds
+function M.addCount(h, nowMs, field, n)
+	local b = bucketFor(h, nowMs)
+	b[field] = (b[field] or 0) + (n or 1)
+end
+
 -- factorOf(key) -> the class factor, yearMs -> the default year, keys = the
 -- class keys to read (optional; without it the bucket's fields are scanned) ->
 -- Summary = { cov = covered ms (<= windowMs), t = {key = s}, c = {key = cost},
---   s = surcharge, total = sum of c + s }
+--   s = surcharge, total = sum of c + s, g = aborted approaches (0.4.0) }
 function M.window(h, nowMs, windowMs, factorOf, yearMs, keys)
-	local out = { cov = 0, t = {}, c = {}, s = 0, total = 0 }
+	local out = { cov = 0, t = {}, c = {}, s = 0, total = 0, g = 0 }
 	if not h or type(h.b) ~= "table" then return out end
 	local from = nowMs - windowMs
 	local oldest = nil
@@ -220,6 +227,7 @@ function M.window(h, nowMs, windowMs, factorOf, yearMs, keys)
 				end
 			end
 			out.s = out.s + (b.s or 0) * weight
+			out.g = out.g + (b.g or 0) * weight
 		end
 	end
 	out.total = out.total + out.s

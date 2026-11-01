@@ -268,6 +268,23 @@ check("legacy table bucket read", M.windowIncome(lr, 1000, Y, nil)[3].n == 2)
 local wi = M.windowIncome(ir, 1000, Y, nil)
 check("income decoded per cargo", wi[3].n == 3 and wi[3].base == 300 and wi[3].ok == 2 and wi[3].q == 3 and wi[5].n == 1 and wi[5].base == 50)
 
+-- go-around counter (0.4.0): a plain bucket field summed pro rata like the seconds
+local hg = M.new(0)
+M.add(hg, 1000, 1000, "driving", Y, 0, 1.0, Y)
+M.addCount(hg, 1000, "g", 1)
+M.addCount(hg, 2000, "g", 1)
+near("count summed", W(hg, 2000, Y).g, 2, 1e-9)
+check("count is a bucket field", M.decode(hg.b[hg.head]).g == 2)
+near("count absent is 0", W(h, 4000, Y).g, 0, 1e-9)
+-- pro rata: a count in the oldest half-covered bucket counts half
+local hg2 = M.new(0)
+M.add(hg2, 1000, 1000, "driving", Y, 0, 1.0, Y)
+M.addCount(hg2, 1000, "g", 2)
+M.add(hg2, M.BUCKET_MS + 1000, 1000, "driving", Y, 0, 1.0, Y)
+near("count weighted with the bucket", M.window(hg2, M.BUCKET_MS + 1000, M.BUCKET_MS / 2 + 1000, F, Y).g, 1, 1e-6)
+local wg = W(hg, 2000, Y)
+check("count survives deflate/inflate", M.inflateSummary(M.deflateSummary(wg)).g == 2 and M.deflateSummary(wg).g == 2)
+
 if failures > 0 then
 	print(failures .. " failure(s)")
 	os.exit(1)

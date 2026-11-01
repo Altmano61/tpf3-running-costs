@@ -94,6 +94,17 @@ check("no result in raw mode", M.result(R, costT) == nil)
 near("no income but costs: result is minus the costs", M.result({ rows = {}, sum = { n = 0, base = 0, income = 0 }, scaled = true, empty = true }, costT), -300, 1e-9)
 check("nothing at all: no result", M.result({ rows = {}, sum = { n = 0, base = 0, income = 0 }, scaled = false, empty = true }, { sum = 0, empty = true }) == nil)
 
+-- holding row with the go-around count (0.4.0)
+local Th = M.build({
+	{ cov = Y, t = { driving = 600, holding = 120 }, c = { driving = 600, holding = 120 }, s = 0, total = 720, g = 2.4 },
+	{ cov = Y, t = { driving = 300, holding = 60 }, c = { driving = 300, holding = 60 }, s = 0, total = 360, g = 1 },
+}, C)
+check("go-arounds summed and rounded", Th.goArounds == 3, tostring(Th.goArounds))
+check("holding row carries the count", Th.rows[2].key == "holding" and Th.rows[2].count == 3 and Th.rows[1].count == nil)
+local Tn = M.build({ { cov = Y, t = { driving = 600 }, c = { driving = 600 }, s = 0, total = 600 } }, C)
+check("no holding: count 0, no row", Tn.goArounds == 0 and #Tn.rows == 1)
+check("holding label key", M.holdingLabelKey(0) == "running_costs_class_holding" and M.holdingLabelKey(1) == "running_costs_class_holding_one" and M.holdingLabelKey(3) == "running_costs_class_holding_n")
+
 if failures > 0 then
 	print(failures .. " failure(s)")
 	os.exit(1)

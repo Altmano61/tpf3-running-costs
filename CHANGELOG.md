@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.4.0 (unreleased)
+
+- New cost class "holding pattern" for aircraft circling for a free runway or hovering in the landing
+  queue and for ships waiting for a berth (mod.io request by x4dzior): detected from the engine's flight
+  state falling back (Landing/Approach → Flight), hovering below 5 m/s in flight, or ships below 1 m/s in
+  the harbour approach zone; charged at 100 % like driving. The row label counts the aborted approaches
+  in the window ("holding pattern (3 go-arounds)"); the live line shows "holding".
+- `holding.lua` (pure, luajit-tested) holds the rules; the sampler reads `MOVE_PATH_AIRCRAFT` /
+  `AIRCRAFT` only for aircraft and ships en route (carrier cached per vehicle); state tables `statC`,
+  `airF`, `airH`, `airS`, bucket field `g`; STATE_VERSION unchanged.
+
 ## 0.3.1 (2026-10-31)
 
 - Smaller saved state, same display: each closed time bucket of the per-vehicle cost and income

@@ -18,17 +18,18 @@ local function round(x)
 end
 
 -- summaries: {Summary}, classes: the cost_classes module ->
--- { rows = { { key, labelKey, factor, colour, seconds, share, amount } },
---   surcharge = { amount, pct } | nil, sum, coverageMs, lessData, empty }
+-- { rows = { { key, labelKey, factor, colour, seconds, share, amount, count (holding row: go-arounds) } },
+--   surcharge = { amount, pct } | nil, sum, coverageMs, lessData, empty, goArounds (0.4.0, integer) }
 function M.build(summaries, classes)
-	local out = { rows = {}, surcharge = nil, sum = 0, coverageMs = 0, lessData = 0, empty = true }
+	local out = { rows = {}, surcharge = nil, sum = 0, coverageMs = 0, lessData = 0, empty = true, goArounds = 0 }
 	if type(summaries) ~= "table" then return out end
-	local t, c, s = {}, {}, 0
+	local t, c, s, g = {}, {}, 0, 0
 	local covs = {}
 	for __, w in ipairs(summaries) do
 		if type(w) == "table" and (w.cov or 0) > 0 then
 			covs[#covs + 1] = w.cov
 			if w.cov > out.coverageMs then out.coverageMs = w.cov end
+			g = g + (w.g or 0)
 			for k, v in pairs(w.t or {}) do t[k] = (t[k] or 0) + v end
 			for k, v in pairs(w.c or {}) do
 				c[k] = (c[k] or 0) + v
@@ -40,6 +41,7 @@ function M.build(summaries, classes)
 	if #covs == 0 then return out end
 	out.empty = false
 	out.sum = out.sum + s
+	out.goArounds = round(g)
 	for __, cov in ipairs(covs) do
 		if cov < out.coverageMs - M.COVERAGE_TOLERANCE_MS then out.lessData = out.lessData + 1 end
 	end
@@ -59,6 +61,7 @@ function M.build(summaries, classes)
 				seconds = sec,
 				share = totalSeconds > 0 and sec / totalSeconds or 0,
 				amount = c[cl.key] or 0,
+				count = cl.key == "holding" and out.goArounds or nil,
 			}
 		end
 	end
@@ -66,6 +69,13 @@ function M.build(summaries, classes)
 		out.surcharge = { amount = s, pct = classCost > 0 and 100 * s / classCost or nil }
 	end
 	return out
+end
+
+-- strings.json key of the holding row label for n aborted approaches
+function M.holdingLabelKey(n)
+	if (n or 0) <= 0 then return "running_costs_class_holding" end
+	if n == 1 then return "running_costs_class_holding_one" end
+	return "running_costs_class_holding_n"
 end
 
 -- rcPerYear = getRunningCost (incl. surcharge), staticPerYear = the parts'

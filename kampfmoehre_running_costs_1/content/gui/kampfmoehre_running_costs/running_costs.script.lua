@@ -22,7 +22,7 @@
 -- live values) and fee_rows.lua (maintenance card), all unit-tested with luajit.
 
 function data()
-	local VERSION = "0.3.1"
+	local VERSION = "0.4.0"
 	local SAMPLE_S = 2     -- seconds between reads of the sampler state / table refreshes
 	local LOG_PREFIX = "[kampfmoehre_running_costs] "
 	local GS_NAME = "kampfmoehre_running_costs_1::/running_costs/running_costs.gs"
@@ -426,7 +426,7 @@ function data()
 		end
 		-- signature for cheap change detection
 		local sig = { tostring(T.empty), tostring(T.coverageMs), tostring(T.lessData), tostring(round(T.sum)), tostring(T.booked and round(T.booked) or "") }
-		for __, r in ipairs(T.rows) do sig[#sig + 1] = r.key .. ":" .. round(r.amount) .. ":" .. round(r.share * 1000) end
+		for __, r in ipairs(T.rows) do sig[#sig + 1] = r.key .. ":" .. round(r.amount) .. ":" .. round(r.share * 1000) .. ":" .. tostring(r.count or "") end
 		if T.surcharge then sig[#sig + 1] = "s:" .. round(T.surcharge.amount) end
 		if T.income then
 			sig[#sig + 1] = "i:" .. T.income.mode .. ":" .. round(T.income.sum.income) .. ":" .. #T.income.rows .. ":" .. tostring(T.result and round(T.result) or "") .. ":" .. round(T.income.pending or 0)
@@ -444,7 +444,16 @@ function data()
 	end
 
 	local function classLabel(r)
+		if r.key == "holding" then   -- 0.4.0: the label carries the aborted approaches
+			return fmt(cost_rows.holdingLabelKey(r.count), { n = tostring(r.count or 0) })
+		end
 		return fmt(r.labelKey, { factor = tostring(round(r.factor * 100)) })
+	end
+	local function classCell(r, cell)
+		if r.key == "holding" then
+			return builtin.TextView{ meta = { class = "font-scale-body", tooltip = _("running_costs_class_holding_tooltip") }, text = classLabel(r) }
+		end
+		return cell(classLabel(r))
 	end
 
 	local CostTable = react.RegisterRecipe("KampfmoehreRunningCostsTable", function(p)
@@ -479,7 +488,7 @@ function data()
 		} } }
 		for __, r in ipairs(T.rows) do
 			rows[#rows + 1] = builtin.Row{ cells = {
-				cell(classLabel(r)),
+				classCell(r, cell),
 				builtin.Component{
 					meta = { class = "kampfmoehre-rc-barcell" },
 					layout = builtin.BoxLayout{
@@ -601,6 +610,13 @@ function data()
 		local okR, rc = pcall(api.engine.util.vehicle.getRunningCost, v)
 		local okS, speed = pcall(api.engine.util.vehicle.getSpeed, v)
 		local key = classes.classify(stateName(tv.state), (okS and speed) or 0)
+		if key == "driving" then
+			-- holding (0.4.0) is decided by the sampler (episode memory); its
+			-- summary is at most one sample old
+			local gs = gsComponent()
+			local w = gs and summaryOf(gs, v) or nil
+			if type(w) == "table" and w.key == "holding" then key = "holding" end
+		end
 		local L = cost_rows.live((okR and rc) or 0, staticPerYear(tv), key, classes)
 		L.key = key
 		return L

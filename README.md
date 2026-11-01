@@ -101,6 +101,27 @@ fine, and that are covered elsewhere too, costs money without benefit and
 can be moved or removed; a building whose rows start at low conditions earns
 its keep. The mod changes nothing about the pool.
 
+## Holding pattern (0.4.0)
+
+Aircraft that go around because the runway is occupied, helicopters hovering in the
+landing queue and ships waiting for a free berth move too fast for the "waiting en
+route" row (it means standing still), so they used to count as "driving". They now
+get a row of their own, "holding pattern", charged at 100 % like driving. For
+aircraft the label carries the number of aborted landing approaches in the window
+("holding pattern (3 go-arounds)"), the figure that tells you a line has more
+aircraft than its airports can land: small airfields cannot get a second runway, so
+the answer is bigger aircraft rather than more of them.
+
+How it is detected (measured 2026-11-01, `docs/probes/holding_probe/README.md`):
+the engine's flight state of an aircraft normally runs Taxi → TakeOff → Flight →
+Approach → Landing → Taxi; an aborted approach shows as the state falling back
+(Landing or Approach → Flight, Landing → Approach). From such a drop the aircraft
+counts as holding until it lands for real (Landing with the runway reserved or below
+half its cruise altitude), taxis, or starts a new leg. Helicopters queue by hovering
+in state Flight below 5 m/s. Ships queue in the harbour approach zone below 1 m/s.
+The live line of the vehicle window shows "holding" as soon as the sampler has
+classified the vehicle so (at most one sample behind).
+
 ## Installation
 
 Subscribe on mod.io or in the in-game Mod-Hub, then enable the mod when
@@ -165,6 +186,14 @@ rate of a healthy vehicle.
   (`::MaintenanceStationEowExtensionPoint`, order 55, below the vehicle list). The fee was measured on
   a single truck: ratio 0.250 of the running-cost rate in every booking, and
   on the large save as the median over 647 bookings.
+- Holding (0.4.0): `holding.lua` is a pure function of the previous memory (last
+  flight state, in an episode, stop index; three flat state tables per aircraft)
+  and the current observation (`MOVE_PATH_AIRCRAFT` component: flight state,
+  altitude, cruise altitude for aircraft, `approachingStation` for ships; `AIRCRAFT`
+  component: runway reservation). The sampler caches each vehicle's carrier with its
+  static rate and reads these components only for aircraft and ships that are en
+  route, so road and rail vehicles cost nothing extra. Aborted approaches are a
+  counted bucket field (`g`) weighted like the seconds.
 - `cost_classes.lua` is the single list of states, factors, texts and
   colours; the sampler and the GUI both iterate it, so later versions can add
   classes (e.g. speed buckets) without touching the table code.
