@@ -12,7 +12,15 @@
 -- game's cargo flow HUD reads on unloaded items), the cargo type from
 -- SIM_CARGO; passengers are the game's own passenger cargo type. Items whose
 -- vehicle cannot be found are kept under the line ("L<line>") so the line
--- table still sees them. Per key, cargo type and time bucket this script
+-- table still sees them.
+--
+-- Transfers (0.4.1): the event comes once per item at the final delivery
+-- with the whole journey's base price and the LAST leg's vehicle; the game
+-- books the legs' shares in C++ (docs/probes/income_probe/). Cargo items list
+-- their legs in SIM_CARGO.pickupPoints, so an item with several legs is
+-- split over the vehicles of all legs by straight-line leg length
+-- (income_legs.lua), each leg counting the item once. Passengers have no leg
+-- list and stay on the vehicle that delivered them. Per key, cargo type and time bucket this script
 -- counts items, base income (before the company-level factor) and on-time
 -- items, in the same bucket ring as the costs (cost_history.lua). The handler
 -- NEVER returns a value: a returned table would change the prices.
@@ -25,10 +33,10 @@
 -- the new records into the rings of its own state every sample, deduplicated
 -- by record id. A per-batch get/set of a tiny state costs a fraction of a
 -- millisecond; writing the rings per batch was the expensive variant.
--- State: { version, q = { [id] = { rk, key, t, n, base, ok, q, at } }, batches, items, perf, tPerfLog }
+-- State: { version, q = { [id] = { rk, key, t, n, base, ok, q, at } }, batches, items, split, perf, tPerfLog }
 
 function data()
-	local VERSION = "0.4.0"
+	local VERSION = "0.4.1"
 	local INCOME_STATE_VERSION = 3  -- 3: a queue of records, consumed by the cost sampler
 	local QUEUE_MS = 8000         -- records stay this long (the sampler reads every 3 s; ~0.3 ms per batch at 15 s)
 	local PERF_LOG_MS = 300000
@@ -40,6 +48,7 @@ function data()
 	local LOG_PREFIX = "[kampfmoehre_running_costs] "
 
 	local history = ug_require "kampfmoehre_running_costs_1::/running_costs/cost_history.lua"
+	local income_legs = ug_require "kampfmoehre_running_costs_1::/running_costs/income_legs.lua"
 
 	local gameLog = log   -- the game's global log table, before the local below shadows it
 	local function log(text)
@@ -78,18 +87,23 @@ function data()
 		end
 	end
 
+	local function simCargo(e)
+		local ok, sc = pcall(api.engine.getComponent, e.simEntity, api.type.ComponentType.SIM_CARGO)
+		if ok and sc then return sc end
+		return nil
+	end
+
 	-- the vehicle that delivered the item: SIM_ENTITY_AT_VEHICLE, else the
 	-- event's vehicleEntity when it is not the item itself, else the cargo's
 	-- last pickup point; nil when unknown
-	local function vehicleOf(e)
+	local function vehicleOf(e, sc)
 		local okA, at = pcall(api.engine.getComponent, e.simEntity, api.type.ComponentType.SIM_ENTITY_AT_VEHICLE)
 		if okA and at and type(at.vehicle) == "number" and at.vehicle >= 0 then return at.vehicle end
 		if type(e.vehicleEntity) == "number" and e.vehicleEntity >= 0 and e.vehicleEntity ~= e.simEntity then
 			local okT, tv = pcall(api.engine.getComponent, e.vehicleEntity, api.type.ComponentType.TRANSPORT_VEHICLE)
 			if okT and tv then return e.vehicleEntity end
 		end
-		local okC, sc = pcall(api.engine.getComponent, e.simEntity, api.type.ComponentType.SIM_CARGO)
-		local pts = okC and sc and sc.pickupPoints
+		local pts = sc and sc.pickupPoints
 		if type(pts) == "table" and #pts > 0 then
 			local last = pts[#pts]
 			if type(last) == "table" and type(last.vehicle) == "number" and last.vehicle >= 0 then return last.vehicle end
@@ -98,17 +112,16 @@ function data()
 	end
 
 	-- ring key: the vehicle, or "L<line>" when only the line is known
-	local function ringKey(e)
-		local v = vehicleOf(e)
+	local function ringKey(e, sc)
+		local v = vehicleOf(e, sc)
 		if v ~= nil then return v end
 		if type(e.lineEntity) == "number" and e.lineEntity >= 0 then return "L" .. e.lineEntity end
 		return nil
 	end
 
-	local function cargoKey(id, e)
+	local function cargoKey(id, e, sc)
 		if id == "SimEntityAtVehicleSystem" then return passengerId() end
-		local ok, sc = pcall(api.engine.getComponent, e.simEntity, api.type.ComponentType.SIM_CARGO)
-		if ok and sc and type(sc.cargoType) == "number" then return sc.cargoType end
+		if sc and type(sc.cargoType) == "number" then return sc.cargoType end
 		return nil
 	end
 
@@ -134,21 +147,39 @@ function data()
 				tostring(id), #param, type(e1), e1 and tostring(e1.vehicleEntity) or "-", e1 and tostring(e1.simEntity) or "-",
 				e1 and tostring(e1.basePrice) or "-"))
 		end
-		local items = 0
+		local items, split = 0, 0
 		for __, e in ipairs(param) do
 			if type(e) == "table" and type(e.simEntity) == "number" then
-				local key = cargoKey(id, e)
-				local rk = ringKey(e)
-				if debugThis then log("debug item: cargo=" .. tostring(key) .. " ring=" .. tostring(rk)) end
-				if key ~= nil and rk ~= nil then
+				local sc = (not isPassengers) and simCargo(e) or nil
+				local key = cargoKey(id, e, sc)
+				if key ~= nil then
 					-- passengers have no delivery quality: their on-time cell stays "–"
 					local ok = nil
 					if not isPassengers then
 						local okQ, q = pcall(api.engine.util.cargo.isGoodQuality, e.simEntity)
 						if okQ and type(q) == "boolean" then ok = q end
 					end
-					history.bufferAdd(buffer, rk, key, now, tonumber(e.basePrice) or 0, ok)
-					items = items + 1
+					local legs = sc and income_legs.split(sc.pickupPoints, e.toPos, e.basePrice) or {}
+					if #legs >= 2 then
+						-- transfer chain: every leg's vehicle (or line) gets its share
+						local added = false
+						for __2, leg in ipairs(legs) do
+							local rk = leg.v or (leg.line and ("L" .. leg.line)) or nil
+							if rk ~= nil then
+								history.bufferAdd(buffer, rk, key, now, leg.base, ok)
+								added = true
+							end
+						end
+						if debugThis then log("debug item: cargo=" .. tostring(key) .. " legs=" .. #legs) end
+						if added then items, split = items + 1, split + 1 end
+					else
+						local rk = ringKey(e, sc)
+						if debugThis then log("debug item: cargo=" .. tostring(key) .. " ring=" .. tostring(rk)) end
+						if rk ~= nil then
+							history.bufferAdd(buffer, rk, key, now, tonumber(e.basePrice) or 0, ok)
+							items = items + 1
+						end
+					end
 				end
 			end
 		end
@@ -161,6 +192,7 @@ function data()
 		history.queueAppend(s.q, buffer, tag, now)
 		history.queueTrim(s.q, now, QUEUE_MS)
 		s.items = (s.items or 0) + items
+		s.split = (s.split or 0) + split
 		s.batches = (s.batches or 0) + 1
 		local ms = clock:getTime() / 1000
 		s.perf = s.perf or { ms = 0, n = 0, maxMs = 0 }
@@ -170,10 +202,10 @@ function data()
 		if now - (s.tPerfLog or 0) >= PERF_LOG_MS then
 			local qn = 0
 			for __ in pairs(s.q) do qn = qn + 1 end
-			log(string.format("income perf over %.0f s of game time: %d batches / %d items, %.2f ms per batch (state get/set incl.), max %.2f ms, %d records queued",
-				(now - (s.tPerfLog or 0)) / 1000, s.batches or 0, s.items or 0, s.perf.ms / math.max(1, s.perf.n), s.perf.maxMs, qn))
+			log(string.format("income perf over %.0f s of game time: %d batches / %d items (%d split over transfer legs), %.2f ms per batch (state get/set incl.), max %.2f ms, %d records queued",
+				(now - (s.tPerfLog or 0)) / 1000, s.batches or 0, s.items or 0, s.split or 0, s.perf.ms / math.max(1, s.perf.n), s.perf.maxMs, qn))
 			s.perf = { ms = 0, n = 0, maxMs = 0 }
-			s.batches, s.items, s.tPerfLog = 0, 0, now
+			s.batches, s.items, s.split, s.tPerfLog = 0, 0, 0, now
 		end
 		state:set(s)
 	end

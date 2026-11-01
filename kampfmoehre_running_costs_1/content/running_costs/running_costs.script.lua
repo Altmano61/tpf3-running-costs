@@ -31,7 +31,7 @@
 -- A version mismatch rebuilds the state from scratch.
 
 function data()
-	local VERSION = "0.4.0"
+	local VERSION = "0.4.1"
 	local STATE_VERSION = 7       -- 2: histories carry `first`; 3: income rings `inc` (0.2.0); 5: pools + maintainedBy (0.3.0); 6/7: flat summaries, buckets packed into strings (0.3.1)
 	local MAX_FAILS = 10          -- consecutive failed steps before the state is rebuilt
 	local SAMPLE_MS = 3000       -- game time between samples (8.5 ms per sample at 364 vehicles: state get 2.8, classify 2.8, set 2.9)

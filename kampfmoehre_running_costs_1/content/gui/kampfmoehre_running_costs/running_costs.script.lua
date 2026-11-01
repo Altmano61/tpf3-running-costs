@@ -22,7 +22,7 @@
 -- live values) and fee_rows.lua (maintenance card), all unit-tested with luajit.
 
 function data()
-	local VERSION = "0.4.0"
+	local VERSION = "0.4.1"
 	local SAMPLE_S = 2     -- seconds between reads of the sampler state / table refreshes
 	local LOG_PREFIX = "[kampfmoehre_running_costs] "
 	local GS_NAME = "kampfmoehre_running_costs_1::/running_costs/running_costs.gs"
@@ -207,7 +207,10 @@ function data()
 
 	-- one TRANSPORT_VEHICLE read per vehicle: the income the game has not booked
 	-- yet (booked at departure; the events arrive per item while unloading)
-	-- and the capacity per cargo type (config.capacities[cargoTypeId + 1])
+	-- and the capacity per cargo type: config.allCaps[cargoTypeId + 1] is the
+	-- capacity over all load configurations (what the base GUI's isAbleToLoadCargo
+	-- reads); config.capacities only holds the configuration currently loaded, so
+	-- a wagon carrying plastics showed "–" for the clothing it takes back (0.4.1)
 	local function vehicleFacts(vehicles)
 		local pending, caps = 0, {}
 		for __, v in ipairs(vehicles or {}) do
@@ -215,7 +218,8 @@ function data()
 			if okT and tv then
 				local pi = tv.unloadPendingIncome
 				if pi and type(pi.amount) == "number" and pi.amount > 0 then pending = pending + pi.amount end
-				local c = tv.config and tv.config.capacities
+				local c = tv.config and tv.config.allCaps
+				if type(c) ~= "table" or next(c) == nil then c = tv.config and tv.config.capacities end
 				if type(c) == "table" then
 					for i, cap in ipairs(c) do
 						if type(cap) == "number" and cap > 0 then caps[i - 1] = (caps[i - 1] or 0) + cap end

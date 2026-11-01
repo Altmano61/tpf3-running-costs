@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.4.1 (2026-11-01)
+
+- Fix: cargo handed over between lines (warehouses, transfer chains) was credited entirely to the vehicle
+  of the last leg; the earlier legs showed "no income yet" next to a booked amount, and on a vehicle
+  with a second cargo delivered directly that cargo absorbed the booked money (mod.io report). The game
+  raises one `OnCalcTicketPrice` event per item at the final delivery with the whole journey's base
+  price; the collector now splits it over the vehicles of all legs from `SIM_CARGO.pickupPoints`,
+  proportional to the straight-line leg lengths (`income_legs.lua`, tested). Each leg counts the item once.
+- The income perf line counts the items split over legs.
+- Fix: the capacity column of the income table followed the load configuration currently on the
+  wagons (`config.capacities`), so a multi-cargo wagon showed "–" for the cargo it was not carrying
+  at that moment; it now uses `config.allCaps`, the capacity over all load configurations.
+
 ## 0.4.0 (unreleased)
 
 - New cost class "holding pattern" for aircraft circling for a free runway or hovering in the landing

@@ -49,7 +49,8 @@ Available on mod.io: <https://mod.io/g/transportfever3/m/running-cost-breakdown>
 
 Under the cost table a second table shows the **income of the same window
 per cargo type**: items delivered, income, income per item, the share
-delivered on time, and the capacity the consist(s) offer for that cargo.
+delivered on time, and the capacity the consist(s) can offer for that cargo
+(over all load configurations of the wagons, not only the one loaded right now).
 Passengers are one row. Rows are sorted by income; a sum row and a
 **Result** line (income minus running costs of the window) close the block.
 
@@ -65,6 +66,23 @@ amount. For a single vehicle the vehicle's own account is used when the
 game provides one, otherwise the line's factor ("scaled with the line's
 bookings"). Only when no account is readable are base prices shown and the
 Result line is replaced by "–".
+
+**Transfers (0.4.1).** The game raises that event once per item, at the final
+delivery, with the base price of the whole journey (straight line from source
+to destination) and the vehicle of the *last* leg; the shares of the earlier
+legs are booked in C++ without an event (measured with
+`docs/probes/income_probe/`: 1157 batches, 560 chain items, none repeated).
+A cargo item lists its legs in `SIM_CARGO.pickupPoints` (vehicle, line and
+pickup position per leg), so the collector splits such an item over the
+vehicles of all legs in proportion to the straight-line length of each leg
+(pickup point to pickup point, the last leg to the delivery position;
+`income_legs.lua`). Each leg counts the item once, so a lorry feeding a
+warehouse shows the goods it carried even though the money arrives only
+when another line completes the delivery. The split key is an assumption:
+the game's own key is not readable, the per-line scaling to the booked
+income corrects the totals either way, only the weights between cargo types
+inside one line depend on it. A leg whose vehicle was sold since goes to its
+line; passengers have no leg list and stay on the vehicle that delivered them.
 
 The income table uses the cost table's coverage: a vehicle that exists but
 delivered nothing shows "no income yet" and a Result of minus its costs.
