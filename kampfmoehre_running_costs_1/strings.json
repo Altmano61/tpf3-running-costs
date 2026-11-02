@@ -62,7 +62,7 @@
         "running_costs_fee_none": "no vehicles maintained yet",
         "running_costs_fee_sold": "sold vehicles ({n})",
         "running_costs_airport_line": "Missed approaches: {n} in the last {min} min",
-        "running_costs_airport_tooltip": "Aborted landing approaches (runway busy) of aircraft heading for this airport in the last {min} min of game time.\nIf the number keeps growing, use fewer or bigger aircraft or build another runway."
+        "running_costs_airport_tooltip": "Aborted landing approaches (runway busy) of aircraft heading for this airport in the last {min} min of game time.\nIf the number keeps growing, use fewer or bigger aircraft or build another runway.\n↑ / ↓: clearly more / fewer than in the {third} min before."
     },
     "de": {
         "running_costs_now": "Jetzt {rate}/min",
@@ -127,6 +127,6 @@
         "running_costs_fee_none": "noch keine Fahrzeuge gewartet",
         "running_costs_fee_sold": "verkaufte Fahrzeuge ({n})",
         "running_costs_airport_line": "Fehlanflüge: {n} in den letzten {min} min",
-        "running_costs_airport_tooltip": "Abgebrochene Landeanflüge (wegen belegter Landebahn) für diesen Flughafen in den letzten {min} min Spielzeit.\nBei zu hoher Zahl weniger oder größere Flugzeuge einsetzen oder eine zusätzliche Landebahn bauen."
+        "running_costs_airport_tooltip": "Abgebrochene Landeanflüge (wegen belegter Landebahn) für diesen Flughafen in den letzten {min} min Spielzeit.\nBei zu hoher Zahl weniger oder größere Flugzeuge einsetzen oder eine zusätzliche Landebahn bauen.\n↑ / ↓: deutlich mehr / weniger als in den {third} min davor."
     }
 }

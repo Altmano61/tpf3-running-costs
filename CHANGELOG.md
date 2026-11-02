@@ -8,6 +8,8 @@
   time for the station group of the aircraft's current line stop (two component reads per go-around, nothing
   per sample; `airport_counts.lua`, tested). One bucket ring per airport in the state under `airG`, created on
   the first go-around and pruned when the airport is gone or its window is empty. "–" until the sampler has run.
+- A red ↑ / green ↓ behind the count when the last third of the window (8 min) saw clearly more / fewer
+  missed approaches than the third before (difference ≥ 2 and ≥ half the smaller count; `airport_counts.trend`).
 
 ## 0.4.1 (2026-11-01)
 

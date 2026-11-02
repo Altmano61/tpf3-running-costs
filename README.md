@@ -115,7 +115,15 @@ so the hook is in place before any window opens. It
 appears in station groups whose construction comes from the game's
 `station/air/` folder (or is named "airport"/"airfield"), and in any station
 group that has recorded approaches; it shows "–" until the sampler has
-produced a state for the save.
+produced a state for the save. A red ↑ or green ↓ follows the count when
+the last third of the window (8 min) saw clearly more or fewer missed
+approaches than the third before: a difference of at least 2 that is at least
+half the smaller count, so a line hovering between 2 and 3 shows no arrow
+(`airport_counts.trend`, thirds cut pro rata through the 4-minute buckets).
+The airport counts events at its runway and keeps them for the whole window;
+the line and vehicle rows sum the histories of the line's *current* vehicles,
+so after selling aircraft the airport's number stays above the line's until
+the window has moved on.
 
 ## Maintenance fee (0.3.0)
 

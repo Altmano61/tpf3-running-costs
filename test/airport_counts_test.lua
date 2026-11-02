@@ -59,6 +59,36 @@ check("prune tolerates nil", M.prune(nil, 0, YEAR, exists, H) == 0)
 M.record(airG, 501, 5 * YEAR, H)
 check("record after prune", M.count(airG[501], 5 * YEAR + MIN, YEAR, H) == 1)
 
+-- trend(ring, nowMs, windowMs, history) -> 1 (clearly more in the last third of the
+-- window than in the third before), -1 (clearly fewer), 0 otherwise; "clearly" =
+-- a difference of at least 2 and at least half the smaller count
+local function ringWith(times)
+	local g = {}
+	for __, t in ipairs(times) do M.record(g, 1, t, H) end
+	return g[1]
+end
+local T = 10 * YEAR                 -- "now"
+local R = YEAR / 3                  -- a third of the window
+check("no ring: flat", M.trend(nil, T, YEAR, H) == 0)
+check("empty window: flat", M.trend(ringWith({ T - 3 * YEAR }), T, YEAR, H) == 0)
+-- 4 in the last third, 1 in the one before -> up
+check("rising", M.trend(ringWith({ T - 1.5 * R, T - 0.9 * R, T - 0.6 * R, T - 0.3 * R, T - 0.1 * R }), T, YEAR, H) == 1)
+-- 1 in the last third, 4 in the one before -> down
+check("falling", M.trend(ringWith({ T - 1.9 * R, T - 1.7 * R, T - 1.5 * R, T - 1.2 * R, T - 0.1 * R }), T, YEAR, H) == -1)
+-- 3 vs 2: a difference of one is noise
+check("2 -> 3 is flat", M.trend(ringWith({ T - 1.5 * R, T - 1.2 * R, T - 0.6 * R, T - 0.3 * R, T - 0.1 * R }), T, YEAR, H) == 0)
+-- 12 vs 10: a difference of two is not enough at that level
+check("10 -> 12 is flat", M.trend(ringWith((function()
+	local t = {}
+	for i = 1, 10 do t[#t + 1] = T - 2 * R + i * (R / 11) end
+	for i = 1, 12 do t[#t + 1] = T - R + i * (R / 13) end
+	return t
+end)()), T, YEAR, H) == 0)
+-- 0 -> 2: the first go-arounds after a quiet period count as rising
+check("0 -> 2 rises", M.trend(ringWith({ T - 0.5 * R, T - 0.2 * R }), T, YEAR, H) == 1)
+-- the oldest third of the window does not take part
+check("old events ignored", M.trend(ringWith({ T - 2.9 * R, T - 2.8 * R, T - 2.7 * R, T - 2.6 * R }), T, YEAR, H) == 0)
+
 if failures > 0 then
 	print(failures .. " failure(s)")
 	os.exit(1)

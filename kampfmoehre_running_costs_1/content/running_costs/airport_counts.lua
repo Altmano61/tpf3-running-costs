@@ -45,6 +45,23 @@ function M.count(ring, nowMs, windowMs, history)
 	return math.floor((w.g or 0) + 0.5)
 end
 
+-- 1 when the last third of the window saw clearly more missed approaches
+-- than the third before it, -1 when clearly fewer, 0 otherwise. "Clearly" =
+-- a difference of at least 2 that is at least half the smaller count, so a
+-- line hovering between 2 and 3 shows no arrow. The oldest third of the
+-- window does not take part. Thirds are cut pro rata through the 4-minute
+-- buckets (cost_history.window), i.e. assuming an even spread inside a bucket.
+function M.trend(ring, nowMs, windowMs, history)
+	if ring == nil then return 0 end
+	local third = windowMs / 3
+	local recent = (history.window(ring, nowMs, third, zero, windowMs, NO_KEYS).g or 0)
+	local both = (history.window(ring, nowMs, 2 * third, zero, windowMs, NO_KEYS).g or 0)
+	local prev = math.max(0, both - recent)
+	local lo, hi = math.min(recent, prev), math.max(recent, prev)
+	if hi - lo < 2 or hi < 1.5 * lo then return 0 end
+	return recent > prev and 1 or -1
+end
+
 -- drop rings of station groups that no longer exist (exists(e) -> boolean)
 -- and rings whose window holds nothing; returns the number of rings kept
 function M.prune(airG, nowMs, windowMs, exists, history)

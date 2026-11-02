@@ -1099,7 +1099,8 @@ function data()
 		pcall(function() sampled = gs ~= nil and gs.state_native ~= nil end)
 		local ring = sampled and stateEntry(gs, "airG", sg) or nil
 		local n = sampled and airports.count(ring, gameTime(), yearMs(), cost_history) or nil
-		return { show = ring ~= nil or isAirport(sg), n = n }
+		local trend = sampled and airports.trend(ring, gameTime(), yearMs(), cost_history) or 0
+		return { show = ring ~= nil or isAirport(sg), n = n, trend = trend }
 	end
 
 	AirportLine = react.RegisterRecipe("KampfmoehreRunningCostsAirportLine", function(p)
@@ -1107,32 +1108,38 @@ function data()
 		react.onStepTimer(function()
 			local now = airportLineData(p.entityId)
 			local old = state:old()
-			if now.show ~= old.show or now.n ~= old.n then state:set(now) end
+			if now.show ~= old.show or now.n ~= old.n or now.trend ~= old.trend then state:set(now) end
 		end, SAMPLE_S)
 		local L = state:old()
 		if not L.show then
 			return builtin.BoxLayout{ children = {} }
 		end
 		local minutes = tostring(fee_rows.minutes(yearMs()))
+		local third = tostring(math.max(1, round(fee_rows.minutes(yearMs()) / 3)))
+		local rowChildren = {
+			builtin.ImageView{
+				path = "::/gui/line_vehicle_mgmt/icons/vehicle_airplane_18.tga",
+				scaling = builtin.type.ImageViewScaling.AutoFit,
+			},
+			builtin.TextView{
+				meta = { class = "font-scale-body" },
+				text = "  " .. fmt("running_costs_airport_line", { n = L.n ~= nil and tostring(L.n) or "–", min = minutes }),
+			},
+		}
+		-- clearly rising (red) or falling (green) against the third of the window before
+		if L.trend ~= 0 then
+			rowChildren[#rowChildren + 1] = builtin.TextView{
+				meta = { class = "font-scale-body, " .. (L.trend > 0 and "negative" or "success") },
+				text = L.trend > 0 and " ↑" or " ↓",
+			}
+		end
 		return builtin.BoxLayout{
 			orientation = builtin.type.Orientation.Vertical,
 			children = {
 				builtin.Component{ meta = { class = "kampfmoehre-rc-sep" } },   -- the card's separator line with more room (running_costs.css.lua)
 				builtin.Component{
-					meta = { tooltip = fmt("running_costs_airport_tooltip", { min = minutes }) },
-					layout = builtin.BoxLayout{
-						orientation = builtin.type.Orientation.Horizontal,
-						children = {
-							builtin.ImageView{
-								path = "::/gui/line_vehicle_mgmt/icons/vehicle_airplane_18.tga",
-								scaling = builtin.type.ImageViewScaling.AutoFit,
-							},
-							builtin.TextView{
-								meta = { class = "font-scale-body" },
-								text = "  " .. fmt("running_costs_airport_line", { n = L.n ~= nil and tostring(L.n) or "–", min = minutes }),
-							},
-						},
-					},
+					meta = { tooltip = fmt("running_costs_airport_tooltip", { min = minutes, third = third }) },
+					layout = builtin.BoxLayout{ orientation = builtin.type.Orientation.Horizontal, children = rowChildren },
 				},
 			},
 		}
