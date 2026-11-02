@@ -90,6 +90,33 @@ There is deliberately no profit per cargo type: splitting the running costs
 between cargos would need an arbitrary key. The capacity column is there so
 you can compare "share of income" with "share of the train" yourself.
 
+## Missed approaches per airport (0.5.0)
+
+The vehicle and line windows count an aircraft's go-arounds per line
+("holding pattern (6 go-arounds)"); that tells you which line suffers. The
+airport window tells you which airport is the bottleneck: a line "Missed
+approaches: N in the last 24 min" sums the aborted approaches of all aircraft
+heading for that airport. The same event the holding detection already finds
+is counted a second time for the station group of the aircraft's current line
+stop (`TransportVehicle.stopIndex`, still the approached stop at that moment
+because the aircraft has not landed), so there is no per-airport scan and
+nothing to cache or invalidate when lines change: two component reads per
+go-around, nothing per sample. The state holds one bucket ring per airport
+under `airG`, created on the first go-around and pruned in the 60 s sweep when
+the airport is gone or its window is empty, so quiet airports cost nothing.
+The line sits below the chart of the window's "Statistics" card, behind
+the card's own separator line: the window's plugin slot is above the waiting
+hall and the terminals, where the number read like a passenger figure, so the
+mod adds the line as an extra child of the statistics card
+(`content_card.ContentCard` with localKey `stationGroupStatistics`, the same
+hook as the line window's balance card) instead of using the plugin slot. A
+UI-root plugin (`entry.res.lua`) loads the GUI script when the game starts,
+so the hook is in place before any window opens. It
+appears in station groups whose construction comes from the game's
+`station/air/` folder (or is named "airport"/"airfield"), and in any station
+group that has recorded approaches; it shows "–" until the sampler has
+produced a state for the save.
+
 ## Maintenance fee (0.3.0)
 
 The finance category **"Maintenance Vehicles"** is not a repair price. Every

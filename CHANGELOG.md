@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.0 (2026-11-02)
+
+- Airport windows (station groups with an airport) show "Missed approaches: N in the last 24 min": the aborted
+  landing approaches of all aircraft heading for that airport, so the bottleneck airport can be told from the
+  lines that suffer (mod.io request). The go-around already detected by `holding.step` is counted a second
+  time for the station group of the aircraft's current line stop (two component reads per go-around, nothing
+  per sample; `airport_counts.lua`, tested). One bucket ring per airport in the state under `airG`, created on
+  the first go-around and pruned when the airport is gone or its window is empty. "–" until the sampler has run.
+
 ## 0.4.1 (2026-11-01)
 
 - Fix: cargo handed over between lines (warehouses, transfer chains) was credited entirely to the vehicle

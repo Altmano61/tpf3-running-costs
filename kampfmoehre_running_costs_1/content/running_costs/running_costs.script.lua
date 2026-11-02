@@ -19,6 +19,7 @@
 --           from income.script.lua's queue state), incSeen = { [recordId] = t },
 --     statR = { [vehicle] = static rate per year }, statT = { [vehicle] = ms of the last check },
 --     statC = { [vehicle] = carrier: 1 air, 2 water, 0 other } (0.4.0, read with the static rate),
+--     airG = { [station group] = Ring with bucket.g } (missed approaches per airport, 0.5.0; pruned when empty),
 --     airF / airH / airA / airS = { [aircraft] = last flight state / 1 while holding / 1 while a drop may be
 --           counted / stop index while holding } (holding.lua memory),
 --     pool = { [building] = Pool (cost_history.newPool: one sliding-span entry per vehicle) },
@@ -31,7 +32,7 @@
 -- A version mismatch rebuilds the state from scratch.
 
 function data()
-	local VERSION = "0.4.1"
+	local VERSION = "0.5.0"
 	local STATE_VERSION = 7       -- 2: histories carry `first`; 3: income rings `inc` (0.2.0); 5: pools + maintainedBy (0.3.0); 6/7: flat summaries, buckets packed into strings (0.3.1)
 	local MAX_FAILS = 10          -- consecutive failed steps before the state is rebuilt
 	local SAMPLE_MS = 3000       -- game time between samples (8.5 ms per sample at 364 vehicles: state get 2.8, classify 2.8, set 2.9)
@@ -44,6 +45,7 @@ function data()
 	local classes = ug_require "kampfmoehre_running_costs_1::/running_costs/cost_classes.lua"
 	local history = ug_require "kampfmoehre_running_costs_1::/running_costs/cost_history.lua"
 	local holding = ug_require "kampfmoehre_running_costs_1::/running_costs/holding.lua"
+	local airports = ug_require "kampfmoehre_running_costs_1::/running_costs/airport_counts.lua"
 
 	local gameLog = log   -- the game's global log table, before the local below shadows it
 	local function log(text)
@@ -251,6 +253,7 @@ function data()
 		s.airF = s.airF or {}
 		s.airH = s.airH or {}
 		s.airS = s.airS or {}
+		s.airG = s.airG or {}   -- 0.5.0: missed approaches per airport (station group)
 		s.airA = s.airA or {}
 		local count = 0
 		local nAir, nWater = 0, 0   -- perf line: how many vehicles get the holding reads
@@ -297,7 +300,19 @@ function data()
 			end
 			local tLua = luaClock:getTime()
 			history.add(h, now, dtMs, key, static, math.max(0, rc - static), classes.factor(key), yearMs)
-			if goAround then history.addCount(h, now, "g", 1) end
+			if goAround then
+				history.addCount(h, now, "g", 1)
+				-- 0.5.0: also count it for the airport the aircraft was approaching:
+				-- the station group of its current line stop (two component reads
+				-- per go-around, nothing per sample)
+				local line = lineOf[v]
+				if type(line) == "number" and line >= 0 then
+					local okT, tv = pcall(api.engine.getComponent, v, api.type.ComponentType.TRANSPORT_VEHICLE)
+					local okL, lc = pcall(api.engine.getComponent, line, api.type.ComponentType.LINE)
+					local sg = (okT and tv and okL) and airports.stopStationGroup(lc, tv.stopIndex) or nil
+					if sg then airports.record(s.airG, sg, now, history) end
+				end
+			end
 			local w = history.window(h, now, yearMs, classes.factor, yearMs, CLASS_KEYS)
 			luaMs = luaMs + (luaClock:getTime() - tLua) / 1000
 			w.line = lineOf[v] or -1
@@ -352,6 +367,10 @@ function data()
 				end
 			end
 			s.poolStored = stored   -- entries kept in the state (perf line)
+			s.airports = airports.prune(s.airG, now, yearMs, function(e)
+				local okE, ex = pcall(api.engine.entityExists, e)
+				return not (okE and ex == false)
+			end, history)
 			for k, t in pairs(s.mb or {}) do
 				local d = tonumber(k:match(":(%d+)$"))
 				if d == nil or dropped[d] or type(t) ~= "number" or now - t > yearMs then s.mb[k] = nil end
@@ -375,7 +394,7 @@ function data()
 	end
 	local function stateSizes(s)
 		local parts = {}
-		for __, k in ipairs({ "v", "summary", "inc", "incSeen", "pool", "mb", "statR", "statT", "statC", "airF", "airH", "airA", "airS" }) do
+		for __, k in ipairs({ "v", "summary", "inc", "incSeen", "pool", "mb", "statR", "statT", "statC", "airF", "airH", "airA", "airS", "airG" }) do
 			if type(s[k]) == "table" then
 				local t, n = sizeOf(s[k])
 				parts[#parts + 1] = string.format("%s %d/%d", k, t, n)
@@ -395,7 +414,7 @@ function data()
 		if type(s) ~= "table" or s.version ~= STATE_VERSION or type(s.tSample) ~= "number" or s.tSample > now
 			or type(s.v) ~= "table" or type(s.summary) ~= "table" or type(s.pool) ~= "table" then
 			s = { version = STATE_VERSION, tSample = now, tPerfLog = now, fails = 0,
-				v = {}, summary = {}, inc = {}, pool = {}, mb = {}, statR = {}, statT = {}, statC = {}, airF = {}, airH = {}, airA = {}, airS = {},
+				v = {}, summary = {}, inc = {}, pool = {}, mb = {}, statR = {}, statT = {}, statC = {}, airF = {}, airH = {}, airA = {}, airS = {}, airG = {},
 				perf = { lastMs = 0, maxMs = 0 } }
 			state:set(s)
 			log("v" .. VERSION .. " sampler started (fresh state) at gameTime=" .. now)

@@ -1,4 +1,5 @@
 local ssu = require "::/gui/main/stylesheetutil.lua"
+local entity_window_sizes = require "::/gui/entity_window/entity_window_sizes.lua"
 
 -- Running Cost Breakdown: the breakdown table (running_costs.script.lua
 -- CostTable) and the maintenance fee table (FeeTable, 0.3.0) with time-share bars like Top Speed's section table, and the
@@ -8,6 +9,16 @@ function data()
 	local a = ssu.makeAdder(result)
 
 	local colorDefault = api.gui.genericRep.get(api.gui.genericRep.find("::/gui/main/default_colors.gres")).data
+
+	-- airport line (0.5.0): the card's separator line (content_card.css.lua
+	-- card-children-separator) with more room above and below, between the
+	-- statistics chart and "Missed approaches"
+	a("R::InfoCalloutWrapper R::Component!kampfmoehre-rc-sep", {
+		gravity = { 0.5, -1 },
+		size = { entity_window_sizes.InnerCardWidth, 1 },
+		margin = { 10, 0, 10, 0 },
+		backgroundColor = colorDefault.BaseVeryLight,
+	})
 
 	a("R::KampfmoehreRunningCostsTable TextView, R::KampfmoehreRunningCostsFeeTable TextView", {
 		padding = { 1, 6, 1, 6 },

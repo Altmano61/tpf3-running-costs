@@ -22,7 +22,7 @@
 -- live values) and fee_rows.lua (maintenance card), all unit-tested with luajit.
 
 function data()
-	local VERSION = "0.4.1"
+	local VERSION = "0.5.0"
 	local SAMPLE_S = 2     -- seconds between reads of the sampler state / table refreshes
 	local LOG_PREFIX = "[kampfmoehre_running_costs] "
 	local GS_NAME = "kampfmoehre_running_costs_1::/running_costs/running_costs.gs"
@@ -38,6 +38,7 @@ function data()
 	local cost_rows = ug_require "kampfmoehre_running_costs_1::/gui/kampfmoehre_running_costs/cost_rows.lua"
 	local cost_history = ug_require "kampfmoehre_running_costs_1::/running_costs/cost_history.lua"
 	local fee_rows = ug_require "kampfmoehre_running_costs_1::/gui/kampfmoehre_running_costs/fee_rows.lua"
+	local airports = ug_require "kampfmoehre_running_costs_1::/running_costs/airport_counts.lua"
 
 	local function round(x) return math.floor(x + 0.5) end
 	local function money(x) return api.util.formatMoney(round(x or 0)) end
@@ -716,16 +717,25 @@ function data()
 	-- Wrap content_card.ContentCard (the module table is shared with the base
 	-- scripts, so line_eow's call reaches this function). Only the card with
 	-- localKey "lineBalance" is touched; forward all arguments.
+	local AirportLine   -- 0.5.0, defined below (an upvalue here, not a global)
 	local origContentCard = content_card.ContentCard
 	content_card.ContentCard = function(...)
 		local n = select('#', ...)
 		local params = select(n, ...)
-		if type(params) == "table" and type(params.meta) == "table" and params.meta.localKey == "lineBalance"
-			and type(params.recipeAndParamPermanent) == "table" and params.recipeAndParamPermanent.recipe ~= BalanceWithCosts then
-			local inner = params.recipeAndParamPermanent
+		local key = type(params) == "table" and type(params.meta) == "table" and params.meta.localKey or nil
+		local inner = key and params.recipeAndParamPermanent or nil
+		if key == "lineBalance" and type(inner) == "table" and inner.recipe ~= BalanceWithCosts then
 			local line = type(inner.param) == "table" and inner.param.entityId or nil
 			if line ~= nil then
 				params.recipeAndParamPermanent = content_card.makeRecipeAndParam(BalanceWithCosts, { inner = inner, line = line })
+			end
+		elseif key == "stationGroupStatistics" and type(inner) == "table" and AirportLine ~= nil and params.extraChildrenPermanent == nil then
+			-- airport window (0.5.0): the missed-approach line below the statistics
+			-- chart, behind the card's own separator line (the window's plugin
+			-- slot is above the waiting hall, where the number read as passengers)
+			local sg = type(inner.param) == "table" and inner.param.entityId or nil
+			if sg ~= nil then
+				params.extraChildrenPermanent = { AirportLine{ entityId = sg } }
 			end
 		end
 		return origContentCard(...)
@@ -1051,7 +1061,91 @@ function data()
 			}
 		end)
 
-	log.message(LOG_PREFIX .. "v" .. VERSION .. " GUI loaded (vehicle row, balance card table, maintenance fee card)")
+	-- Missed approaches per airport (0.5.0): one line below the chart of the
+	-- "Statistics" card of an airport's station group window, from the
+	-- sampler's `airG` ring of that station group. The window's own plugin
+	-- slot sits above the waiting hall and terminals, where the line read as
+	-- a passenger figure, so the ContentCard wrapper above adds the line as an
+	-- extra child of the statistics card (localKey "stationGroupStatistics");
+	-- the recipe draws the card's separator line in front of it.
+
+	-- a station group is an airport when one of its stations' constructions
+	-- comes from the game's "station/air/" folder (or is named like one); a
+	-- station group with recorded approaches shows the line in any case
+	local airportCache = {}
+	local function isAirport(sg)
+		local c = airportCache[sg]
+		if c ~= nil then return c end
+		local found = false
+		pcall(function()
+			local g = api.engine.getComponent(sg, api.type.ComponentType.STATION_GROUP)
+			for __, st in ipairs(g and g.stations or {}) do
+				local con = api.engine.system.streetConnectorSystem.getConstructionEntityForStation(st)
+				if type(con) == "number" and con >= 0 then
+					local cc = api.engine.getComponent(con, api.type.ComponentType.CONSTRUCTION)
+					local fn = cc and tostring(cc.fileName):lower() or ""
+					if fn:find("/air/", 1, true) or fn:find("airport", 1, true) or fn:find("airfield", 1, true) then found = true end
+				end
+			end
+		end)
+		airportCache[sg] = found
+		return found
+	end
+
+	-- { show, n = count or nil ("–") }; nil until the sampler has a state
+	local function airportLineData(sg)
+		local gs = gsComponent()
+		local sampled = false
+		pcall(function() sampled = gs ~= nil and gs.state_native ~= nil end)
+		local ring = sampled and stateEntry(gs, "airG", sg) or nil
+		local n = sampled and airports.count(ring, gameTime(), yearMs(), cost_history) or nil
+		return { show = ring ~= nil or isAirport(sg), n = n }
+	end
+
+	AirportLine = react.RegisterRecipe("KampfmoehreRunningCostsAirportLine", function(p)
+		local state = react.useStateLazy(function() return airportLineData(p.entityId) end)
+		react.onStepTimer(function()
+			local now = airportLineData(p.entityId)
+			local old = state:old()
+			if now.show ~= old.show or now.n ~= old.n then state:set(now) end
+		end, SAMPLE_S)
+		local L = state:old()
+		if not L.show then
+			return builtin.BoxLayout{ children = {} }
+		end
+		local minutes = tostring(fee_rows.minutes(yearMs()))
+		return builtin.BoxLayout{
+			orientation = builtin.type.Orientation.Vertical,
+			children = {
+				builtin.Component{ meta = { class = "kampfmoehre-rc-sep" } },   -- the card's separator line with more room (running_costs.css.lua)
+				builtin.Component{
+					meta = { tooltip = fmt("running_costs_airport_tooltip", { min = minutes }) },
+					layout = builtin.BoxLayout{
+						orientation = builtin.type.Orientation.Horizontal,
+						children = {
+							builtin.ImageView{
+								path = "::/gui/line_vehicle_mgmt/icons/vehicle_airplane_18.tga",
+								scaling = builtin.type.ImageViewScaling.AutoFit,
+							},
+							builtin.TextView{
+								meta = { class = "font-scale-body" },
+								text = "  " .. fmt("running_costs_airport_line", { n = L.n ~= nil and tostring(L.n) or "–", min = minutes }),
+							},
+						},
+					},
+				},
+			},
+		}
+	end)
+
+	-- UI root plugin (0.5.0): only here so this script, and with it the
+	-- ContentCard wrapper, is loaded when the game starts instead of with the
+	-- first vehicle / line / depot window (the airport card lives in a window
+	-- without a plugin of ours)
+	M.EntryPlugin = react.RegisterPluginRecipe({ id = "::ModEntryPointExtension" }, "KampfmoehreRunningCostsEntry",
+		function() return builtin.BoxLayout{ children = {} } end)
+
+	log.message(LOG_PREFIX .. "v" .. VERSION .. " GUI loaded (vehicle row, balance card table, maintenance fee card, airport line)")
 
 	return M
 end
