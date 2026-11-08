@@ -34,7 +34,8 @@ What the mod adds:
 - **Depot and maintenance building windows (0.3.0):** a card with the
   building's "Maintenance Vehicles" fee of the window and the share of it
   charged for vehicles that were already in very good condition; see below.
-- Purely cosmetic, achievements stay enabled. English and German.
+- Purely cosmetic, achievements stay enabled. English, German and Ukrainian
+  (translation by [Altmano61](https://github.com/Altmano61), 0.5.1).
 
 The time window is one **default game year** (1461 s of game time), the unit
 the game itself books in. It does not follow the calendar speed setting: at

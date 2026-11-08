@@ -36,7 +36,7 @@
 -- State: { version, q = { [id] = { rk, key, t, n, base, ok, q, at } }, batches, items, split, perf, tPerfLog }
 
 function data()
-	local VERSION = "0.5.0"
+	local VERSION = "0.5.1"
 	local INCOME_STATE_VERSION = 3  -- 3: a queue of records, consumed by the cost sampler
 	local QUEUE_MS = 8000         -- records stay this long (the sampler reads every 3 s; ~0.3 ms per batch at 15 s)
 	local PERF_LOG_MS = 300000

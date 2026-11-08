@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.1 (2026-11-08)
+
+- Ukrainian translation (`strings.json` `uk`, all 63 keys) contributed by Altmano61 (PR #1). The game picks it
+  up when the Ukrainian language mod (mod.io `ukrainian-language`) is installed.
+- `strings.json` back to 4-space indentation with plain apostrophes after the merge; the short holding label
+  in Ukrainian distinguishes a holding pattern ("очікування посадки") from generic waiting ("очікування").
+
 ## 0.5.0 (2026-11-02)
 
 - Airport windows (station groups with an airport) show "Missed approaches: N in the last 24 min": the aborted
