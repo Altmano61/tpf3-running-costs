@@ -185,6 +185,32 @@ vehicle's path (`MOVE_PATH.dyn.approachingStation`); for standing vehicles the
 flag is clean and the read costs microseconds
 (`docs/probes/station_probe/README.md`).
 
+## Infrastructure upkeep per town area (0.6.0)
+
+Town windows get a card "Infrastructure upkeep" below the game's "Statistics"
+card. It lists what your infrastructure inside that town's area (the light area
+the game draws around a town) costs per game year, by category: stations,
+depots, maintenance buildings, warehouses, other buildings, tracks, roads and
+signals, the total on top. Stations and depots expand by carrier (roadside
+stops, road terminals, rail stations, harbours, airports and heliports; road,
+rail and ship depots, hangars and helicopter hangars), tracks and roads show
+their length and expand by type, so an oversized station, a superfluous depot
+or a track class faster than the trains need stands out. Electrified variants
+are folded into their base type: catenary costs nothing extra in the game.
+Bridges and tunnels stay inside the track and road amounts; the row tooltip
+shows their length and what they cost on top of plain track or road.
+
+Not included: vehicles (they belong to lines, not areas), one-off construction
+costs, and tracks or roads inside a station or depot (their upkeep is part of
+the building's figure, as in the game's windows). Each figure uses the formula
+of the corresponding game window, so a station's share is what its own window
+shows; summed over all towns the card matches the finance table's "Upkeep" rows
+within about one percent. The card is computed from live data when a town
+window opens and refreshed at most every 30 seconds while one is open; the
+first scan shows "calculating …" for a moment.
+
+![Town window with the infrastructure upkeep card](kampfmoehre_running_costs_1/_metadata/5.png)
+
 ## Installation
 
 Subscribe on mod.io or in the in-game Mod-Hub, then enable the mod when
@@ -278,6 +304,18 @@ items (~7 batches per second of game time on that save). Open windows read
 one small summary and one income ring per shown vehicle every 2 s; a
 building window reads its pool and one entry per listed vehicle.
 
+- Infrastructure upkeep per town area (0.6.0): no game script. The GUI script
+  runs one scan over all towns on the GUI thread, in slices of 4 ms per frame
+  (`react.onStep` of the entry plugin): `content/running_costs/area_scan.lua`
+  is the resumable scan, `area_upkeep.lua` the formulas, the category mapping
+  and the row builder (both tested with luajit), `content/gui/.../area_env.lua`
+  the engine reads (constructions via `getTownClosestConstructions`, edges via
+  `streetSystem.getNode2SegmentMap` with a Hermite length from position and
+  tangent, the town of an edge from `api.engine.util.town.getClosestTown` at
+  its midpoint, edge objects for signals and roadside stops). A full pass is
+  about 100 ms on a 13k-edge save; the result is cached for 30 s. The formulas
+  and their verification against the game are in `docs/probes/area_probe/`.
+
 ## Development
 
 ```
@@ -285,6 +323,8 @@ building window reads its pool and one entry per listed vehicle.
 luajit test/cost_classes_test.lua # pure modules, no game needed
 luajit test/cost_history_test.lua
 luajit test/cost_rows_test.lua
+luajit test/area_upkeep_test.lua
+luajit test/area_scan_test.lua
 ```
 
 Reload the savegame to pick up changed files. Log lines start with

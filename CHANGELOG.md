@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.6.0 (unreleased)
+
+- Town windows get a card "Infrastructure upkeep" below the game's "Statistics" card: the player's yearly
+  infrastructure upkeep inside that town's area by category (stations, depots, maintenance buildings,
+  warehouses, other buildings, tracks, roads, signals), total on top, zero rows hidden. Stations and depots
+  expand by carrier (roadside stops, road terminals, rail stations, harbours, airports, heliports; road /
+  rail / ship depots, hangars, helicopter hangars), tracks and roads carry their length in km and expand
+  by track / road type; electrification variants fold into the base type (catenary has no extra upkeep).
+  Bridges and tunnels stay inside the track / road amounts, their length and surcharge show in the row
+  tooltip. The mod presents the figures only, no recommendations.
+- The area is the game's own: every construction and every edge belongs to the town whose area it lies in
+  (`streetConnectorSystem.getTownClosestConstructions`, `api.engine.util.town.getClosestTown` on the edge's
+  midpoint). Formulas as the game's windows use them: constructions `round(maintenanceCost ×
+  infrastructureMaintenanceScale × yearMultiplier) + round(Σ accumulatedCost)` (the multiplier only for
+  constructions with `costsYearProgression`); edges `Hermite length × street template maintenanceCost`
+  (already scaled) plus the bridge / tunnel type rate; edge objects (signals, roadside stops) like
+  constructions. Summed over all towns the figures match the finance table's "Upkeep" rows within ~1 %
+  (`docs/probes/area_probe/README.md`).
+- Computed on the GUI thread from live data, no saved state: one scan over all towns (`area_scan.lua` over
+  `area_env.lua`, pure parts `area_upkeep.lua`, both tested) runs in 4 ms slices per frame (≈ 100 ms in
+  total on a 13k-edge save), is started when a town window opens and repeated at most every 30 s while one
+  is open. "calculating …" until the first scan is done.
+- Stylesheet: the money / number / flat-button rules lost their recipe scope and the padding rule gained
+  the new table (20 rules, was 21).
+- Ukrainian: the new keys are English placeholders until translated.
+
 ## 0.5.1 (2026-11-08)
 
 - Ukrainian translation (`strings.json` `uk`, all 63 keys) contributed by Altmano61 (PR #1). The game picks it
