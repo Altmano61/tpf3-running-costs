@@ -22,7 +22,7 @@
 -- live values) and fee_rows.lua (maintenance card), all unit-tested with luajit.
 
 function data()
-	local VERSION = "0.5.1"
+	local VERSION = "0.6.0"
 	local SAMPLE_S = 2     -- seconds between reads of the sampler state / table refreshes
 	local LOG_PREFIX = "[kampfmoehre_running_costs] "
 	local GS_NAME = "kampfmoehre_running_costs_1::/running_costs/running_costs.gs"
@@ -39,6 +39,9 @@ function data()
 	local cost_history = ug_require "kampfmoehre_running_costs_1::/running_costs/cost_history.lua"
 	local fee_rows = ug_require "kampfmoehre_running_costs_1::/gui/kampfmoehre_running_costs/fee_rows.lua"
 	local airports = ug_require "kampfmoehre_running_costs_1::/running_costs/airport_counts.lua"
+	local area_upkeep = ug_require "kampfmoehre_running_costs_1::/running_costs/area_upkeep.lua"
+	local area_scan = ug_require "kampfmoehre_running_costs_1::/running_costs/area_scan.lua"
+	local area_env = ug_require "kampfmoehre_running_costs_1::/gui/kampfmoehre_running_costs/area_env.lua"
 
 	local function round(x) return math.floor(x + 0.5) end
 	local function money(x) return api.util.formatMoney(round(x or 0)) end
@@ -1145,14 +1148,199 @@ function data()
 		}
 	end)
 
+	-- Infrastructure upkeep per town area (0.6.0) -----------------------------
+	-- One scan over all towns (area_scan.lua over area_env.lua) computes the
+	-- player's yearly infrastructure upkeep per town area by category; the
+	-- entry plugin feeds it a few ms per frame, a finished scan fires AREA_EVENT
+	-- and the mounted cards re-read it. Cards re-trigger a scan only while one
+	-- is open and the result is older than AREA_TTL_US.
+	local AREA_EVENT = "kampfmoehreRunningCostsAreaUpkeep"
+	local AREA_CARD_KEY = "kampfmoehreRunningCostsAreaUpkeep"
+	local AREA_TTL_US = 30 * 1000000
+	local AREA_BUDGET_US = 4000
+	local AREA_MAX_FAILURES = 3
+	local areaScanner = nil          -- created on first use (area_env.new needs the engine)
+	local areaScannerFailed = false  -- env could not be built, or AREA_MAX_FAILURES steps raised: cards show "–"
+	local areaFailures = 0
+	local areaCards = 0              -- mounted card instances
+
+	local function areaScannerGet()
+		if areaScanner ~= nil or areaScannerFailed then return areaScanner end
+		local ok, env = pcall(area_env.new, area_upkeep)
+		if ok and env then
+			areaScanner = area_scan.new(env, area_upkeep)
+		else
+			areaScannerFailed = true
+			log.message(LOG_PREFIX .. "area scan unavailable: " .. tostring(env))
+		end
+		return areaScanner
+	end
+
+	-- start a scan if there is none or the result is older than the TTL
+	local function areaWant()
+		local S = areaScannerGet()
+		if S == nil or areaScannerFailed or S.running() then return end
+		local age = S.age()   -- by the scanner's own clock
+		if age == nil or age >= AREA_TTL_US then S.start() end
+	end
+
+	-- one slice per frame while a scan runs (entry plugin's onStep)
+	local function areaStep()
+		local S = areaScanner
+		if S == nil or not S.running() then return end
+		local ok, finished = pcall(S.step, AREA_BUDGET_US)
+		if not ok then
+			-- drop the scan instead of retrying the failing slice every frame;
+			-- after a few failed scans the feature switches itself off ("–")
+			S.abort()
+			areaFailures = areaFailures + 1
+			if areaFailures >= AREA_MAX_FAILURES then areaScannerFailed = true end
+			log.message(LOG_PREFIX .. "area scan step failed (" .. areaFailures .. "): " .. tostring(finished))
+			api.gui.fireReactEvent(AREA_EVENT, {})
+			return
+		end
+		if finished then
+			local st = S.stats() or {}
+			log.message(string.format(LOG_PREFIX .. "area scan: %d towns, %d constructions, %d edges, %d objects in %d steps, %.0f ms; all towns %s/year",
+				st.towns or 0, st.constructions or 0, st.edges or 0, st.objects or 0, st.steps or 0, (st.durationUs or 0) / 1000, money(S.grandTotal() or 0)))
+			api.gui.fireReactEvent(AREA_EVENT, {})
+		end
+	end
+
+	local function km(meters)
+		return string.format("%.1f", (meters or 0) / 1000)
+	end
+	-- "{amount}/Year" like the station windows (both are base-game keys)
+	local function yearly(x)
+		return fmt("{maintenanceCost}/{maintenancePeriod}", { maintenanceCost = money(x), maintenancePeriod = _("Year") })
+	end
+
+	local AreaTable = react.RegisterRecipe("KampfmoehreRunningCostsAreaTable", function(p)
+		react.onMount(function()
+			areaCards = areaCards + 1
+			areaWant()
+		end)
+		react.onUnmount(function() areaCards = areaCards - 1 end)
+		local version = react.useState(0)
+		react.onEvent(AREA_EVENT, function() version:set(version:old() + 1) end)
+		react.onStepTimer(function()
+			if areaCards > 0 then areaWant() end
+		end, 1)
+		local expanded = react.useState({})
+		local function cell(text, class)
+			return builtin.TextView{ meta = { class = class or "font-scale-body" }, text = text }
+		end
+		local S = areaScanner
+		local R = S and S.rows(p.town)
+		if R == nil then
+			-- no result yet; "–" once the scanner gave up (see areaStep)
+			local text = areaScannerFailed and "–" or _("running_costs_area_calculating")
+			return builtin.BoxLayout{ children = { cell(text, "font-scale-annotation") } }
+		end
+		local function toggle(key)
+			return function()
+				local copy = {}
+				for k, v in pairs(expanded:old()) do copy[k] = v end
+				copy[key] = not copy[key]
+				expanded:set(copy)
+			end
+		end
+		local function label(r)
+			local text = _("running_costs_area_" .. r.key)
+			if r.meters ~= nil then text = fmt("running_costs_area_km", { label = text, km = km(r.meters) }) end
+			return text
+		end
+		local function edgeTooltip(r)
+			local lines = {}
+			if r.bridges then lines[#lines + 1] = fmt("running_costs_area_bridges", { km = km(r.bridges.meters), amount = money(r.bridges.extra) }) end
+			if r.tunnels then lines[#lines + 1] = fmt("running_costs_area_tunnels", { km = km(r.tunnels.meters), amount = money(r.tunnels.extra) }) end
+			lines[#lines + 1] = _("running_costs_area_inside_note")
+			return table.concat(lines, "\n")
+		end
+		local rows = { builtin.Row{ meta = { localKey = "total" }, cells = {
+			builtin.TextView{ meta = { class = "font-scale-body, bold", tooltip = _("running_costs_area_total_tooltip") }, text = _("running_costs_area_total") },
+			-- a town without any of the player's infrastructure: plain white 0
+			cell(yearly(R.total), "font-scale-body, bold, " .. (R.total >= 0.5 and "negative, " or "") .. "kampfmoehre-rc-money"),
+		} } }
+		for __, r in ipairs(R.rows) do
+			local isOpen = r.children ~= nil and expanded:old()[r.key] == true
+			local labelChildren = {}
+			if r.children ~= nil then
+				labelChildren[#labelChildren + 1] = builtin.Button{
+					meta = { class = "kampfmoehre-rc-namebutton" },
+					content = builtin.BoxLayout{ children = {
+						builtin.ImageView{ path = isOpen and "::/gui/builtin/combobox/arrow_down.tga" or "::/gui/builtin/combobox/arrow_right.tga" },
+					} },
+					onClick = toggle(r.key),
+				}
+			end
+			if r.meters ~= nil then
+				labelChildren[#labelChildren + 1] = builtin.TextView{ meta = { class = "font-scale-body", tooltip = edgeTooltip(r) }, text = label(r) }
+			else
+				labelChildren[#labelChildren + 1] = cell(label(r))
+			end
+			-- a TableLayout cell must not be a layout itself: wrap the toggle +
+			-- label row in a Component (like the bar cells of CostTable)
+			rows[#rows + 1] = builtin.Row{ meta = { localKey = r.key }, cells = {
+				builtin.Component{ layout = builtin.BoxLayout{ orientation = builtin.type.Orientation.Horizontal, children = labelChildren } },
+				cell(yearly(r.amount), "font-scale-body, negative, kampfmoehre-rc-money"),
+			} }
+			if isOpen then
+				for ___, c in ipairs(r.children) do
+					local text = c.key and _("running_costs_area_" .. c.key) or c.label
+					if c.meters ~= nil then text = fmt("running_costs_area_km", { label = text, km = km(c.meters) }) end
+					rows[#rows + 1] = builtin.Row{ meta = { localKey = r.key .. ":" .. tostring(c.key or c.group) }, cells = {
+						cell("    " .. text, "font-scale-annotation"),
+						cell(yearly(c.amount), "font-scale-annotation, negative, kampfmoehre-rc-money"),
+					} }
+				end
+			end
+		end
+		return builtin.BoxLayout{
+			orientation = builtin.type.Orientation.Vertical,
+			children = { builtin.TableLayout{ rows = rows, columnWeights = { 10, -1 } } },
+		}
+	end)
+
+	-- not in the map editor (no player there), like the base charts plugin
+	-- (town_eow.script conditionTownCharts)
+	M.TownCondition = function(params)
+		return not (params and params.state and params.state.isMapEditor)
+	end
+
+	-- the card below the game's "Statistics" card (town.res.lua, order 70);
+	-- the statistics card in town.tl is the template. ContentCard has no title
+	-- tooltip, so the explanation sits on the Total row.
+	M.TownPlugin = react.RegisterPluginRecipe({ id = "::TownEowExtensionPoint" }, "KampfmoehreRunningCostsTown",
+		function(params)
+			return builtin.BoxLayout{
+				meta = { class = "box-plugin-vertical-space" },
+				orientation = builtin.type.Orientation.Vertical,
+				children = {
+					content_card.ContentCard{
+						meta = { localKey = AREA_CARD_KEY },
+						title = _("running_costs_area_title"),
+						initialCalloutTextPermanent = "",
+						recipeAndParamPermanent = content_card.makeRecipeAndParam(AreaTable, { town = params.entityId }),
+						gameCtx = params.gameCtx,
+						showOnRightSide = params.showCalloutOnRightSide,
+					},
+				},
+			}
+		end)
+
 	-- UI root plugin (0.5.0): only here so this script, and with it the
 	-- ContentCard wrapper, is loaded when the game starts instead of with the
 	-- first vehicle / line / depot window (the airport card lives in a window
-	-- without a plugin of ours)
+	-- without a plugin of ours). 0.6.0: also drives the area scan one slice
+	-- per frame while it runs (one boolean check per frame otherwise).
 	M.EntryPlugin = react.RegisterPluginRecipe({ id = "::ModEntryPointExtension" }, "KampfmoehreRunningCostsEntry",
-		function() return builtin.BoxLayout{ children = {} } end)
+		function()
+			react.onStep(areaStep)
+			return builtin.BoxLayout{ children = {} }
+		end)
 
-	log.message(LOG_PREFIX .. "v" .. VERSION .. " GUI loaded (vehicle row, balance card table, maintenance fee card, airport line)")
+	log.message(LOG_PREFIX .. "v" .. VERSION .. " GUI loaded (vehicle row, balance card table, maintenance fee card, airport line, town area card)")
 
 	return M
 end
