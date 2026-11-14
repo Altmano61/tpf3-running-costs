@@ -1352,7 +1352,13 @@ function data()
 			areaCards = areaCards + 1
 			if selected then areaWant() end
 		end)
-		react.onUnmount(function() areaCards = areaCards - 1 end)
+		react.onUnmount(function()
+			areaCards = areaCards - 1
+			-- the finance window is destroyed on close and rebuilt with its initial tab on
+			-- reopen; without this reset a window closed on our tab would reopen on
+			-- "Overview" with selected = true and keep scanning
+			areaTabCurrent = nil
+		end)
 		local version = react.useState(0)
 		react.onEvent(AREA_EVENT, function() version:set(version:old() + 1) end)
 		react.onStepTimer(function()
