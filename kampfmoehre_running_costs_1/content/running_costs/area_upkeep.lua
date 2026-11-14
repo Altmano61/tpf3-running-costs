@@ -294,4 +294,43 @@ function M.rows(acc, town, labelOf)
 	return out
 end
 
+-- Overview over all towns (finance window tab, 0.6.0 part 2) ---------------------
+
+-- towns: the scanned town list; -> { rows = { { town, total, cats = { [cat] = amount },
+-- meters = { tracks, roads } } … } sorted by total desc (ties: town asc), sum = { total, cats } }
+function M.overview(acc, towns, labelOf)
+	local out = { rows = {}, sum = { total = 0, cats = {} } }
+	for __, cat in ipairs(M.CATEGORY_ORDER) do out.sum.cats[cat] = 0 end
+	for __, town in ipairs(towns or {}) do
+		local R = M.rows(acc, town, labelOf)
+		local row = { town = town, total = R.total, cats = {}, meters = { tracks = 0, roads = 0 } }
+		for ___, r in ipairs(R.rows) do
+			row.cats[r.key] = r.amount
+			if r.key == "tracks" or r.key == "roads" then row.meters[r.key] = r.meters or 0 end
+			out.sum.cats[r.key] = (out.sum.cats[r.key] or 0) + r.amount
+		end
+		out.sum.total = out.sum.total + R.total
+		out.rows[#out.rows + 1] = row
+	end
+	table.sort(out.rows, function(a, b)
+		if a.total ~= b.total then return a.total > b.total end
+		return a.town < b.town
+	end)
+	return out
+end
+
+-- steps: sorted { {year, factor}, … } (the game's treeCostYearMultipliers);
+-- -> { year, percent } of the first step after `year`, nil after the last one
+function M.nextPriceStep(steps, year)
+	local current = 1
+	for __, step in ipairs(steps or {}) do
+		if step[1] <= year then
+			current = step[2]
+		else
+			return { year = step[1], percent = round((step[2] / current - 1) * 100) }
+		end
+	end
+	return nil
+end
+
 return M
