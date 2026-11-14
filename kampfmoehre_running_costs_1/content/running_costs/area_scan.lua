@@ -132,7 +132,7 @@ function M.new(env, area_upkeep)
 			else
 				local now = env.now()
 				st.durationUs = now - scan.startedAt
-				result = { at = now, acc = scan.acc }
+				result = { at = now, acc = scan.acc, towns = scan.towns }
 				stats = st
 				scan = nil
 				return true
@@ -155,11 +155,12 @@ function M.new(env, area_upkeep)
 		return area_upkeep.rows(result.acc, town, env.templateLabel)
 	end
 
-	-- towns present in the result (nil without a result)
+	-- every town the scan visited (also those without any player infrastructure),
+	-- sorted; nil without a result
 	function S.towns()
 		if result == nil then return nil end
 		local towns = {}
-		for town in pairs(result.acc.towns) do towns[#towns + 1] = town end
+		for __, town in ipairs(result.towns or {}) do towns[#towns + 1] = town end
 		table.sort(towns)
 		return towns
 	end

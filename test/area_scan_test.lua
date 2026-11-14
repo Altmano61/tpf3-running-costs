@@ -54,8 +54,8 @@ local begins = 0
 local env = {
 	now = function() T = T + 10; return T end,
 	begin = function() begins = begins + 1 end,
-	towns = function() return { 1, 2 } end,
-	constructionsOf = function(town) return town == 1 and { 11, 12, 13 } or { 21 } end,
+	towns = function() return { 1, 2, 3 } end,
+	constructionsOf = function(town) if town == 1 then return { 11, 12, 13 } elseif town == 2 then return { 21 } end return {} end,
 	construction = function(e) return CONS[e] end,
 	edges = function() return { 31, 32, 33, 34, 35, 36 } end,
 	edge = function(e) return EDGES[e] end,
@@ -85,13 +85,14 @@ end)())
 local R2 = S.rows(2)
 near("town 2 total", R2.total, 100 * (20 + 5), 1e-6)
 check("edge without town is skipped", S.stats().edges == 2 and S.rows(1).total + S.rows(2).total == R1.total + R2.total)
-check("stats", S.stats().towns == 2 and S.stats().constructions == 2 and S.stats().objects == 3 and S.stats().steps == steps,
+check("stats", S.stats().towns == 3 and S.stats().constructions == 2 and S.stats().objects == 3 and S.stats().steps == steps,
 	string.format("towns=%s cons=%s objs=%s steps=%s/%s", S.stats().towns, S.stats().constructions, S.stats().objects, S.stats().steps, steps))
 check("duration recorded", type(S.stats().durationUs) == "number" and S.stats().durationUs > 0)
 check("bridge surcharge recorded", R2.rows[1].key == "roads" and R2.rows[1].bridges.extra == 500)
 check("template label from env", R1.rows[3].children[1].label == "Lsimple")
 check("age", S.ageUs(S.result().at + 5) == 5)
-check("towns of the result", #S.towns() == 2 and M.new(env, U).towns() == nil)
+check("towns of the result incl. empty ones", #S.towns() == 3 and S.towns()[3] == 3 and M.new(env, U).towns() == nil)
+check("empty town has zero rows", S.rows(3).total == 0 and #S.rows(3).rows == 0)
 near("grand total over all towns", S.grandTotal(), R1.total + R2.total, 1e-6)
 -- a second scan: start while running is a no-op, old result survives until done
 local at1 = S.result().at
