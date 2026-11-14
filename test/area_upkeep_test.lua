@@ -133,6 +133,18 @@ check("exact step year counts as reached", st.year == 1980 and st.percent == 25)
 check("after the last step", M.nextPriceStep(STEPS, 2020) == nil and M.nextPriceStep(STEPS, 2075) == nil)
 check("no steps", M.nextPriceStep({}, 1950) == nil)
 
+-- year-multiplier normaliser and the tab injection helper
+local N = M.normaliseSteps({ [1940] = 2.2, [1900] = 1, [1920] = 1.5 })
+check("normalise map", #N == 3 and N[1][1] == 1900 and N[3][2] == 2.2)
+N = M.normaliseSteps({ { 1920, 1.5 }, { 1900, 1 } })
+check("normalise list of pairs", #N == 2 and N[1][1] == 1900 and N[2][2] == 1.5)
+N = M.normaliseSteps({ { year = 1960, multiplier = 3.2 }, { year = 1940, factor = 2.2 } })
+check("normalise list of records", #N == 2 and N[1][1] == 1940 and N[2][2] == 3.2)
+check("normalise garbage", #M.normaliseSteps(nil) == 0 and #M.normaliseSteps("x") == 0 and #M.normaliseSteps({ "a", {} }) == 0)
+check("normalise string numbers", M.normaliseSteps({ ["2000"] = "5" })[1][1] == 2000)
+check("injection after cargolifetime", M.tabInjectionIndex({ "overview_tab", "finances_tab", "cargolifetime_tab" }, "cargolifetime_tab") == 4)
+check("no injection without the marker", M.tabInjectionIndex({ "a", nil, "b" }, "cargolifetime_tab") == nil and M.tabInjectionIndex({}, "x") == nil)
+
 if failures > 0 then
 	print(failures .. " failure(s)")
 	os.exit(1)

@@ -319,6 +319,42 @@ function M.overview(acc, towns, labelOf)
 	return out
 end
 
+-- the game's treeCostYearMultipliers in whatever Lua shape it arrives: a map
+-- { [year] = factor }, a list of pairs { {year, factor} } or a list of records
+-- { year = y, multiplier|factor|value = f }; anything else -> {}.
+-- -> sorted list { {year, factor}, … }
+function M.normaliseSteps(t)
+	local out = {}
+	if type(t) ~= "table" then return out end
+	local function add(y, f)
+		y, f = tonumber(y), tonumber(f)
+		if y ~= nil and f ~= nil then out[#out + 1] = { y, f } end
+	end
+	for k, v in pairs(t) do
+		if type(v) == "table" then
+			if v.year ~= nil then
+				add(v.year, v.multiplier or v.factor or v.value)
+			else
+				add(v[1], v[2])
+			end
+		else
+			add(k, v)
+		end
+	end
+	table.sort(out, function(a, b) return a[1] < b[1] end)
+	return out
+end
+
+-- keys: localKeys of a TabWidget's children in order (nil holes allowed);
+-- -> the position to append our tab at when `marker` is among them, else nil
+function M.tabInjectionIndex(keys, marker)
+	local n = table.maxn(keys or {})
+	for i = 1, n do
+		if keys[i] == marker then return n + 1 end
+	end
+	return nil
+end
+
 -- steps: sorted { {year, factor}, … } (the game's treeCostYearMultipliers);
 -- -> { year, percent } of the first step after `year`, nil after the last one
 function M.nextPriceStep(steps, year)
