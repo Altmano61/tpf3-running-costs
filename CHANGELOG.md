@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.6.0 (unreleased)
+## 0.6.0 (2026-11-14)
 
 - Town windows get a card "Infrastructure upkeep" below the game's "Statistics" card: the player's yearly
   infrastructure upkeep inside that town's area by category (stations, depots, maintenance buildings,
