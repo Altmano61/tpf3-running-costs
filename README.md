@@ -221,6 +221,8 @@ a history, and is computed only while it is selected. If another mod changes
 the finance window's tabs, the mod setting "Finance window tab" switches ours
 off; the town card stays.
 
+![Finance window with the infrastructure tab](kampfmoehre_running_costs_1/_metadata/6.png)
+
 ## Installation
 
 Subscribe on mod.io or in the in-game Mod-Hub, then enable the mod when
