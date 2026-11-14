@@ -1302,6 +1302,202 @@ function data()
 		}
 	end)
 
+	-- Finance window tab (0.6.0 part 2) ---------------------------------------
+	-- The finance window (game_mechanics/finance/account.tl, recipe FinanceAccount)
+	-- builds its tab list as a literal; there is no extension point. We wrap
+	-- builtin.TabWidgetChild (records each child's localKey) and builtin.TabWidget
+	-- (appends our tab when the list contains the game's "cargolifetime_tab").
+	-- The wrappers run inside recipes we do not control: no react hooks, every
+	-- step in pcall, all arguments forwarded. The selected tab is mirrored via
+	-- the wrapped onValueChange so the overview scans only while it is shown.
+	local AREA_TAB_VALUE = "KampfmoehreRunningCostsArea"
+	local AREA_TAB_MARKER = "cargolifetime_tab"
+	local areaTabCurrent = nil       -- the finance window's selected tab value, as far as we know
+	local areaTabInstalled = false
+
+	local function financeTabEnabled()
+		local ok, all = pcall(api.engine.config.getModParams)
+		local mine = ok and type(all) == "table" and all["kampfmoehre_running_costs_1"] or nil
+		local on = true
+		if type(mine) == "table" and mine.finance_tab ~= nil then on = (mine.finance_tab == 2) end
+		log.message(LOG_PREFIX .. "finance tab: " .. (on and "on" or "off") .. " (mod param)")
+		return on
+	end
+
+	local function playerPresent()
+		local ok, p = pcall(api.engine.util.getPlayer)
+		return ok and type(p) == "number" and p >= 0
+	end
+
+	local function lastArg(...)
+		return select(select('#', ...), ...)
+	end
+
+	-- current calendar year and the normalised price steps (pcall; nil on failure)
+	local function priceStepInfo()
+		local steps, year = nil, nil
+		pcall(function()
+			steps = area_upkeep.normaliseSteps(api.res.getBaseConfig().treeCostYearMultipliers)
+			local gt = api.engine.getComponent(api.engine.util.getWorld(), api.type.ComponentType.GAME_TIME)
+			year = api.engine.util.getCalendarDate(gt.gameTime).year
+		end)
+		if steps == nil or #steps == 0 or type(year) ~= "number" then return nil end
+		return area_upkeep.nextPriceStep(steps, year), true
+	end
+
+	-- p = { selected = boolean }: the table of all towns inside the tab
+	local AreaOverview = react.RegisterRecipe("KampfmoehreRunningCostsAreaOverview", function(p)
+		local selected = p.selected == true
+		react.onMount(function()
+			areaCards = areaCards + 1
+			if selected then areaWant() end
+		end)
+		react.onUnmount(function() areaCards = areaCards - 1 end)
+		local version = react.useState(0)
+		react.onEvent(AREA_EVENT, function() version:set(version:old() + 1) end)
+		react.onStepTimer(function()
+			if selected then areaWant() end
+		end, 1)
+		local function cell(text, class)
+			return builtin.TextView{ meta = { class = class or "font-scale-body" }, text = text }
+		end
+		local function amountCell(amount, bold)
+			local base = bold and "font-scale-body, bold, " or "font-scale-body, "
+			if (amount or 0) >= 0.5 then
+				return cell(money(amount), base .. "negative, kampfmoehre-rc-money")
+			end
+			return cell("–", base .. "kampfmoehre-rc-money")
+		end
+		local children = { content_card.ContentCard{ title = _("running_costs_area_overview_title") } }
+		local S = areaScanner
+		local towns = S and S.towns()
+		if towns == nil then
+			local text = areaScannerFailed and "–" or _("running_costs_area_calculating")
+			children[#children + 1] = cell(text, "font-scale-annotation")
+		else
+			local O = area_upkeep.overview(S.result().acc, towns, tostring)
+			-- total column last, like the base finance table (sum row below, total in the corner)
+			local head = { cell(_("running_costs_area_col_town"), "font-scale-annotation") }
+			for __, cat in ipairs(area_upkeep.CATEGORY_ORDER) do
+				head[#head + 1] = cell(_("running_costs_area_" .. cat), "font-scale-annotation, kampfmoehre-rc-money")
+			end
+			head[#head + 1] = cell(_("running_costs_area_total"), "font-scale-annotation, kampfmoehre-rc-money")
+			local rows = { builtin.Row{ meta = { localKey = "head" }, cells = head } }
+			for __, r in ipairs(O.rows) do
+				local town = r.town
+				local fullName = entityName(town)
+				local cells = {
+					builtin.Button{
+						meta = { class = "kampfmoehre-rc-namebutton", tooltip = fullName },
+						content = builtin.BoxLayout{ children = { cell((shorten(fullName))) } },
+						onClick = function()
+							react.fireEvent(nil, "selectEntity", { entity = town, stack = true })
+						end,
+					},
+				}
+				for ___, cat in ipairs(area_upkeep.CATEGORY_ORDER) do
+					local c = amountCell(r.cats[cat], false)
+					local m = r.meters[cat]
+					if m ~= nil and m > 0 then
+						c = builtin.TextView{
+							meta = { class = "font-scale-body, negative, kampfmoehre-rc-money",
+								tooltip = fmt("running_costs_area_km", { label = _("running_costs_area_" .. cat), km = km(m) }) },
+							text = money(r.cats[cat]),
+						}
+					end
+					cells[#cells + 1] = c
+				end
+				cells[#cells + 1] = amountCell(r.total, false)
+				rows[#rows + 1] = builtin.Row{ meta = { localKey = "t" .. tostring(town) }, cells = cells }
+			end
+			local sum = { cell(_("running_costs_sum"), "font-scale-body, bold") }
+			for __, cat in ipairs(area_upkeep.CATEGORY_ORDER) do sum[#sum + 1] = amountCell(O.sum.cats[cat], true) end
+			sum[#sum + 1] = amountCell(O.sum.total, true)
+			rows[#rows + 1] = builtin.Row{ meta = { localKey = "sum" }, cells = sum }
+			local weights = { 10 }
+			for i = 1, #area_upkeep.CATEGORY_ORDER + 1 do weights[#weights + 1] = -1 end
+			children[#children + 1] = builtin.ScrollArea{
+				content = builtin.Component{ layout = builtin.TableLayout{ rows = rows, columnWeights = weights } },
+				-- like the base FinancesTable: no horizontal scrolling, so the content
+				-- takes the full width and the weighted name column gets the rest
+				horizontalPolicy = builtin.type.ScrollBarPolicy.AlwaysOff,
+				verticalPolicy = builtin.type.ScrollBarPolicy.AsNeeded,
+			}
+		end
+		local step, known = priceStepInfo()
+		if known then
+			local text = step and fmt("running_costs_area_next_step", { year = tostring(step.year), percent = tostring(step.percent) })
+				or _("running_costs_area_no_step")
+			children[#children + 1] = builtin.TextView{
+				meta = { class = "font-scale-annotation", tooltip = _("running_costs_area_next_step_tooltip") },
+				text = text,
+			}
+		end
+		children[#children + 1] = cell(_("running_costs_area_overview_hint"), "font-scale-annotation")
+		return builtin.BoxLayout{
+			meta = { class = "content-layout" },
+			orientation = builtin.type.Orientation.Vertical,
+			children = children,
+		}
+	end)
+
+	local function installFinanceTab()
+		if areaTabInstalled then return end
+		areaTabInstalled = true
+		local origChild = builtin.TabWidgetChild
+		local origWidget = builtin.TabWidget
+		local keyOf = {}      -- node -> localKey of the TabWidgetChild calls since the last TabWidget
+		local logged = false
+		local function logOnce(err)
+			if not logged then
+				logged = true
+				log.message(LOG_PREFIX .. "finance tab wrapper failed, passing through: " .. tostring(err))
+			end
+		end
+		builtin.TabWidgetChild = function(...)
+			local node = origChild(...)
+			pcall(function(params)
+				if type(params) == "table" and type(params.localKey) == "string" then keyOf[node] = params.localKey end
+			end, lastArg(...))
+			return node
+		end
+		builtin.TabWidget = function(...)
+			local n = select('#', ...)
+			local params = lastArg(...)
+			local ok, copy = pcall(function()
+				if type(params) ~= "table" or type(params.tabs) ~= "table" or not playerPresent() then return nil end
+				local keys = {}
+				for i, node in ipairs(params.tabs) do keys[i] = keyOf[node] end
+				if area_upkeep.tabInjectionIndex(keys, AREA_TAB_MARKER, #params.tabs) == nil then return nil end
+				if areaTabCurrent == nil then areaTabCurrent = params.initialValue end
+				local c = {}
+				for k, v in pairs(params) do c[k] = v end
+				local tabs = {}
+				for i, node in ipairs(params.tabs) do tabs[i] = node end
+				tabs[#tabs + 1] = origChild{
+					localKey = "kampfmoehre_rc_area_tab",
+					value = AREA_TAB_VALUE,
+					indicator = builtin.TextView{ meta = { class = "font-scale-tab-widget-indicator" }, text = _("running_costs_area_tab") },
+					item = AreaOverview{ meta = { tag = "menu.finances.kampfmoehre-area" }, selected = (areaTabCurrent == AREA_TAB_VALUE) },
+				}
+				c.tabs = tabs
+				local origOnChange = params.onValueChange
+				c.onValueChange = function(v, ...)
+					areaTabCurrent = v
+					if origOnChange then return origOnChange(v, ...) end
+				end
+				return c
+			end)
+			keyOf = {}
+			if not ok then logOnce(copy) end
+			if not ok or copy == nil then return origWidget(...) end
+			-- replace only the last argument (a ref may precede it)
+			local args = { n = n, ... }
+			args[n] = copy
+			return origWidget((table.unpack or unpack)(args, 1, n))
+		end
+	end
+
 	-- not in the map editor (no player there), like the base charts plugin
 	-- (town_eow.script conditionTownCharts)
 	M.TownCondition = function(params)
@@ -1337,10 +1533,13 @@ function data()
 	M.EntryPlugin = react.RegisterPluginRecipe({ id = "::ModEntryPointExtension" }, "KampfmoehreRunningCostsEntry",
 		function()
 			react.onStep(areaStep)
+			react.onMount(function()
+				if financeTabEnabled() then installFinanceTab() end
+			end)
 			return builtin.BoxLayout{ children = {} }
 		end)
 
-	log.message(LOG_PREFIX .. "v" .. VERSION .. " GUI loaded (vehicle row, balance card table, maintenance fee card, airport line, town area card)")
+	log.message(LOG_PREFIX .. "v" .. VERSION .. " GUI loaded (vehicle row, balance card table, maintenance fee card, airport line, town area card, finance tab)")
 
 	return M
 end

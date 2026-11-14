@@ -23,6 +23,10 @@ function data()
 	a("R::KampfmoehreRunningCostsTable TextView, R::KampfmoehreRunningCostsFeeTable TextView, R::KampfmoehreRunningCostsAreaTable TextView", {
 		padding = { 1, 6, 1, 6 },
 	})
+	-- the finance tab has room: looser rows than the entity-window cards
+	a("R::KampfmoehreRunningCostsAreaOverview TextView", {
+		padding = { 4, 6, 4, 6 },
+	})
 	a("R::KampfmoehreRunningCostsTable ProgressBar!kampfmoehre-rc-bar", {
 		gravity = { -1, 0.5 },
 		backgroundColor1 = colorDefault.BaseVeryLight,
@@ -71,6 +75,16 @@ function data()
 	a("Button!kampfmoehre-rc-namebutton", {
 		gravity = { 0, 0.5 },
 		padding = { 0, 0, 0, 0 },
+	})
+	-- finance window tab (0.6.0): content block like the base finance tabs
+	a("R::KampfmoehreRunningCostsAreaOverview BoxLayout!content-layout", {
+		gravity = { -1, -1 },
+		innerSpacing = { 8, 8 },
+	})
+	-- the table's scroll area fills the tab height (table at the top, step line
+	-- and hint below), like "R::FinancesTable ScrollArea" in finances.css.lua
+	a("R::KampfmoehreRunningCostsAreaOverview ScrollArea", {
+		gravity = { -1, -1 },
 	})
 	-- live line while waiting en route (also used outside the table)
 	a("TextView!kampfmoehre-rc-warn", {

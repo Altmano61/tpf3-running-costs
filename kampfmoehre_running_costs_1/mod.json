@@ -4,7 +4,19 @@
     "incompatibilities": null,
     "modId": "kampfmoehre_running_costs_1",
     "options": null,
-    "params": [],
+    "params": [
+        {
+            "defaultIndex": 1,
+            "key": "finance_tab",
+            "name": "running_costs_param_finance_tab_name",
+            "tooltip": "running_costs_param_finance_tab_tooltip",
+            "uiType": "Button",
+            "values": [
+                "running_costs_param_off",
+                "running_costs_param_on"
+            ]
+        }
+    ],
     "postRunScript": {
         "fileName": ""
     },

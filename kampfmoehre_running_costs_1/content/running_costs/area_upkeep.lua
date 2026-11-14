@@ -345,10 +345,12 @@ function M.normaliseSteps(t)
 	return out
 end
 
--- keys: localKeys of a TabWidget's children in order (nil holes allowed);
+-- keys: localKeys of a TabWidget's children in order (nil holes allowed), count = number
+-- of children (the GUI Lua has no table.maxn and # is unreliable with holes);
 -- -> the position to append our tab at when `marker` is among them, else nil
-function M.tabInjectionIndex(keys, marker)
-	local n = table.maxn(keys or {})
+function M.tabInjectionIndex(keys, marker, count)
+	keys = keys or {}
+	local n = count or #keys
 	for i = 1, n do
 		if keys[i] == marker then return n + 1 end
 	end

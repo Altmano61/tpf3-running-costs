@@ -90,7 +90,18 @@
         "running_costs_area_other_buildings": "Other buildings",
         "running_costs_area_tracks": "Tracks",
         "running_costs_area_roads": "Roads",
-        "running_costs_area_signals": "Signals"
+        "running_costs_area_signals": "Signals",
+        "running_costs_area_tab": "Infrastructure",
+        "running_costs_area_overview_title": "Infrastructure upkeep per town area, per game year",
+        "running_costs_area_col_town": "Town",
+        "running_costs_area_next_step": "Buildings and warehouses: next price step {year} (+{percent} %)",
+        "running_costs_area_no_step": "Buildings and warehouses: no further price step",
+        "running_costs_area_next_step_tooltip": "The game raises the upkeep of buildings in steps every 20 years (1920, 1940, …, 2020). Tracks, roads and signals keep their rate.",
+        "running_costs_param_finance_tab_name": "Finance window tab",
+        "running_costs_param_finance_tab_tooltip": "Adds the tab 'Infrastructure' (upkeep per town area) to the finance window. Switch off if another mod changes that window's tabs.",
+        "running_costs_param_off": "Off",
+        "running_costs_param_on": "On",
+        "running_costs_area_overview_hint": "Player-owned infrastructure per town area (the area shown around the town), per game year as in the station windows. Vehicles are not included."
     },
     "de": {
         "running_costs_now": "Jetzt {rate}/min",
@@ -183,7 +194,18 @@
         "running_costs_area_other_buildings": "Sonstige Gebäude",
         "running_costs_area_tracks": "Gleise",
         "running_costs_area_roads": "Strassen",
-        "running_costs_area_signals": "Signale"
+        "running_costs_area_signals": "Signale",
+        "running_costs_area_tab": "Infrastruktur",
+        "running_costs_area_overview_title": "Infrastruktur-Unterhalt pro Stadtgebiet, pro Spieljahr",
+        "running_costs_area_col_town": "Stadt",
+        "running_costs_area_next_step": "Gebäude und Lagerhäuser: nächste Preisstufe {year} (+{percent} %)",
+        "running_costs_area_no_step": "Gebäude und Lagerhäuser: keine weitere Preisstufe",
+        "running_costs_area_next_step_tooltip": "Das Spiel erhöht den Unterhalt von Gebäuden alle 20 Jahre stufenweise (1920, 1940, …, 2020). Gleise, Strassen und Signale behalten ihren Satz.",
+        "running_costs_param_finance_tab_name": "Tab im Finanzfenster",
+        "running_costs_param_finance_tab_tooltip": "Fügt dem Finanzfenster den Tab 'Infrastruktur' (Unterhalt pro Stadtgebiet) hinzu. Ausschalten, falls eine andere Mod die Tabs dieses Fensters verändert.",
+        "running_costs_param_off": "Aus",
+        "running_costs_param_on": "Ein",
+        "running_costs_area_overview_hint": "Infrastruktur des Spielers pro Stadtgebiet (die um die Stadt angezeigte Fläche), pro Spieljahr wie in den Stationsfenstern. Fahrzeuge sind nicht enthalten."
     },
     "uk": {
         "running_costs_now": "Зараз {rate}/хв",
@@ -276,6 +298,17 @@
         "running_costs_area_other_buildings": "Other buildings",
         "running_costs_area_tracks": "Tracks",
         "running_costs_area_roads": "Roads",
-        "running_costs_area_signals": "Signals"
+        "running_costs_area_signals": "Signals",
+        "running_costs_area_tab": "Infrastructure",
+        "running_costs_area_overview_title": "Infrastructure upkeep per town area, per game year",
+        "running_costs_area_col_town": "Town",
+        "running_costs_area_next_step": "Buildings and warehouses: next price step {year} (+{percent} %)",
+        "running_costs_area_no_step": "Buildings and warehouses: no further price step",
+        "running_costs_area_next_step_tooltip": "The game raises the upkeep of buildings in steps every 20 years (1920, 1940, …, 2020). Tracks, roads and signals keep their rate.",
+        "running_costs_param_finance_tab_name": "Finance window tab",
+        "running_costs_param_finance_tab_tooltip": "Adds the tab 'Infrastructure' (upkeep per town area) to the finance window. Switch off if another mod changes that window's tabs.",
+        "running_costs_param_off": "Off",
+        "running_costs_param_on": "On",
+        "running_costs_area_overview_hint": "Player-owned infrastructure per town area (the area shown around the town), per game year as in the station windows. Vehicles are not included."
     }
 }

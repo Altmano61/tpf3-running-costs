@@ -144,6 +144,15 @@ check("normalise garbage", #M.normaliseSteps(nil) == 0 and #M.normaliseSteps("x"
 check("normalise string numbers", M.normaliseSteps({ ["2000"] = "5" })[1][1] == 2000)
 check("injection after cargolifetime", M.tabInjectionIndex({ "overview_tab", "finances_tab", "cargolifetime_tab" }, "cargolifetime_tab") == 4)
 check("no injection without the marker", M.tabInjectionIndex({ "a", nil, "b" }, "cargolifetime_tab") == nil and M.tabInjectionIndex({}, "x") == nil)
+-- the game's GUI Lua has no table.maxn; holes (tabs without a recorded key) before the marker must not hide it
+check("injection with holes and an explicit count, without table.maxn", (function()
+	local saved = table.maxn
+	table.maxn = nil
+	local ok, got = pcall(M.tabInjectionIndex, { nil, nil, "cargolifetime_tab" }, "cargolifetime_tab", 3)
+	local ok2, got2 = pcall(M.tabInjectionIndex, { "a", nil, "b" }, "x", 3)
+	table.maxn = saved
+	return ok and got == 4 and ok2 and got2 == nil
+end)())
 
 if failures > 0 then
 	print(failures .. " failure(s)")
