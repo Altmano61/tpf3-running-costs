@@ -22,8 +22,19 @@
   `area_env.lua`, pure parts `area_upkeep.lua`, both tested) runs in 4 ms slices per frame (≈ 100 ms in
   total on a 13k-edge save), is started when a town window opens and repeated at most every 30 s while one
   is open. "calculating …" until the first scan is done.
-- Stylesheet: the money / number / flat-button rules lost their recipe scope and the padding rule gained
-  the new table (20 rules, was 21).
+- The finance window gets a sixth tab "Infrastructure" after "Delivery Time": one row per town with the
+  total and the eight categories, sorted by total, a sum row (equals the finance table's "Upkeep …" rows
+  summed over the carriers), the town name opens the town window, tracks/roads cells carry the km in their
+  tooltip, and a line with the next price step for buildings ("next price step 1980 (+25 %)", from the
+  game's `treeCostYearMultipliers`). The tab list of the finance window is a literal without an extension
+  point, so the mod wraps `builtin.TabWidgetChild` (records each child's `localKey`) and `builtin.TabWidget`
+  (appends the tab when the list contains the game's `cargolifetime_tab`); the wrapper mirrors the selected
+  tab through the wrapped `onValueChange`, so the scan runs only while the tab is shown, and skips the
+  injection without a player (map editor). Mod parameter "Finance window tab" (default On) switches the
+  wrappers off for players whose other mods change that window.
+- Stylesheet: the money / number / flat-button rules lost their recipe scope, the padding rule gained the
+  town card's table, and the finance tab got three rules of its own (content block, scroll area filling the
+  tab, looser cell padding): 23 rules, was 21.
 - Ukrainian: the new keys are English placeholders until translated.
 
 ## 0.5.1 (2026-11-08)

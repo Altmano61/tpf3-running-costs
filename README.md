@@ -211,6 +211,16 @@ first scan shows "calculating …" for a moment.
 
 ![Town window with the infrastructure upkeep card](kampfmoehre_running_costs_1/_metadata/5.png)
 
+The finance window gets a tab "Infrastructure" next to "Delivery Time": all
+towns side by side, one row each with the total and the eight categories,
+sorted by total, with a sum row at the bottom. Clicking a town name opens its
+window. Below the table the mod names the year of the next price step for
+buildings and warehouses (the game raises their upkeep every 20 years; tracks,
+roads and signals keep their rate). The tab shows the current yearly rate, not
+a history, and is computed only while it is selected. If another mod changes
+the finance window's tabs, the mod setting "Finance window tab" switches ours
+off; the town card stays.
+
 ## Installation
 
 Subscribe on mod.io or in the in-game Mod-Hub, then enable the mod when
@@ -315,6 +325,13 @@ building window reads its pool and one entry per listed vehicle.
   its midpoint, edge objects for signals and roadside stops). A full pass is
   about 100 ms on a 13k-edge save; the result is cached for 30 s. The formulas
   and their verification against the game are in `docs/probes/area_probe/`.
+  The finance window tab: the game builds that window's tab list as a literal
+  (`game_mechanics/finance/account.tl`), so the mod wraps `builtin.TabWidgetChild`
+  to record each child's `localKey` and `builtin.TabWidget` to append its own
+  child when the list contains the game's `cargolifetime_tab`; the wrapped
+  `onValueChange` mirrors the selected tab so the overview only scans while it
+  is shown (`area_upkeep.overview`, `nextPriceStep`, `normaliseSteps`,
+  `tabInjectionIndex` are pure and tested).
 
 ## Development
 
