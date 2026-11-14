@@ -1367,12 +1367,11 @@ function data()
 		local function cell(text, class)
 			return builtin.TextView{ meta = { class = class or "font-scale-body" }, text = text }
 		end
-		local function amountCell(amount, bold)
+		local function amountCell(amount, bold, tooltip)
 			local base = bold and "font-scale-body, bold, " or "font-scale-body, "
-			if (amount or 0) >= 0.5 then
-				return cell(money(amount), base .. "negative, kampfmoehre-rc-money")
-			end
-			return cell("–", base .. "kampfmoehre-rc-money")
+			local shown = (amount or 0) >= 0.5
+			local class = base .. (shown and "negative, " or "") .. "kampfmoehre-rc-money"
+			return builtin.TextView{ meta = { class = class, tooltip = tooltip }, text = shown and money(amount) or "–" }
 		end
 		local children = { content_card.ContentCard{ title = _("running_costs_area_overview_title") } }
 		local S = areaScanner
@@ -1402,16 +1401,10 @@ function data()
 					},
 				}
 				for ___, cat in ipairs(area_upkeep.CATEGORY_ORDER) do
-					local c = amountCell(r.cats[cat], false)
 					local m = r.meters[cat]
-					if m ~= nil and m > 0 then
-						c = builtin.TextView{
-							meta = { class = "font-scale-body, negative, kampfmoehre-rc-money",
-								tooltip = fmt("running_costs_area_km", { label = _("running_costs_area_" .. cat), km = km(m) }) },
-							text = money(r.cats[cat]),
-						}
-					end
-					cells[#cells + 1] = c
+					local tooltip = (m ~= nil and m > 0)
+						and fmt("running_costs_area_km", { label = _("running_costs_area_" .. cat), km = km(m) }) or nil
+					cells[#cells + 1] = amountCell(r.cats[cat], false, tooltip)
 				end
 				cells[#cells + 1] = amountCell(r.total, false)
 				rows[#rows + 1] = builtin.Row{ meta = { localKey = "t" .. tostring(town) }, cells = cells }
@@ -1452,7 +1445,11 @@ function data()
 		areaTabInstalled = true
 		local origChild = builtin.TabWidgetChild
 		local origWidget = builtin.TabWidget
-		local keyOf = {}      -- node -> localKey of the TabWidgetChild calls since the last TabWidget
+		-- node -> localKey of the TabWidgetChild calls since the last TabWidget call. Reset after every
+		-- TabWidget: assumes no TabWidget is built inline inside a sibling child's `item` before the
+		-- outer call (true for account.tl, whose items are recipe nodes; a nested one would wipe the
+		-- keys of earlier siblings and we would simply not inject).
+		local keyOf = {}
 		local logged = false
 		local function logOnce(err)
 			if not logged then
@@ -1471,10 +1468,12 @@ function data()
 			local n = select('#', ...)
 			local params = lastArg(...)
 			local ok, copy = pcall(function()
-				if type(params) ~= "table" or type(params.tabs) ~= "table" or not playerPresent() then return nil end
+				if type(params) ~= "table" or type(params.tabs) ~= "table" then return nil end
 				local keys = {}
 				for i, node in ipairs(params.tabs) do keys[i] = keyOf[node] end
 				if area_upkeep.tabInjectionIndex(keys, AREA_TAB_MARKER, #params.tabs) == nil then return nil end
+				-- engine call only for the finance window, not for every TabWidget in the game
+				if not playerPresent() then return nil end
 				if areaTabCurrent == nil then areaTabCurrent = params.initialValue end
 				local c = {}
 				for k, v in pairs(params) do c[k] = v end

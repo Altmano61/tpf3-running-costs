@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Finance tab: the player check runs only for the finance window (after the tab-list check), the km cells
+  reuse the amount cell (a tracks/roads amount below 0.50 € now shows "–" like the other cells), comment on
+  the key-recording assumption of the tab wrappers. Review follow-ups of 0.6.0, no visible change otherwise.
+
 ## 0.6.0 (2026-11-14)
 
 - Town windows get a card "Infrastructure upkeep" below the game's "Statistics" card: the player's yearly
